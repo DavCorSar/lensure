@@ -10,6 +10,8 @@ import os
 from PIL import Image, ImageFilter, Image
 import numpy as np
 
+SEED = 42
+
 
 class Attacker:
     """
@@ -65,8 +67,9 @@ class Attacker:
         """
         Includes gaussian noise in the image
         """
+        rng = np.random.default_rng(SEED)
         arr = np.array(self.image)
-        noise = np.random.normal(noise_mean, noise_std, arr.shape)
+        noise = rng.normal(noise_mean, noise_std, arr.shape)
         arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
         return Image.fromarray(arr)
 
@@ -74,8 +77,9 @@ class Attacker:
         """
         Returns a different image from the same folder
         """
+        rng = np.random.default_rng(SEED)
         parent_folder = "/".join(self.original_image_path.split("/")[:-1])
-        choice = parent_folder + "/" + np.random.choice(os.listdir(parent_folder))
+        choice = parent_folder + "/" + rng.choice(os.listdir(parent_folder))
         while choice == self.original_image_path:
-            choice = parent_folder + np.random.choice(os.listdir(parent_folder))
+            choice = parent_folder + rng.choice(os.listdir(parent_folder))
         return Image.open(choice)
