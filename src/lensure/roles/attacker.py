@@ -7,7 +7,7 @@ of the system.
 import io
 import os
 
-from PIL import Image, ImageFilter, Image
+from PIL import Image, ImageFilter
 import numpy as np
 
 SEED = 42
