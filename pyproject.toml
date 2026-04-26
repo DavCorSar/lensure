@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "cryptography>=46.0.7",
+    "flake8>=7.3.0",
     "imagehash>=4.3.2",
     "matplotlib>=3.10.8",
     "numpy>=2.4.4",
