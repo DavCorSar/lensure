@@ -19,7 +19,9 @@ dependencies = [
 lensure = "lensure.cli:app"
 
 [dependency-groups]
-dev = []
+dev = [
+    "pytest>=9.0.3",
+]
 
 [tool.uv]
 package = true
