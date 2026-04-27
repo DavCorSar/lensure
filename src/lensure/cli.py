@@ -83,6 +83,7 @@ def complete_execution(images_path: str, output_path: str, embed_og_hash: bool =
             images_path + image_name, embed_og_hash, save_results=True
         )
         fig.savefig(f"{output_path}/{plots_path}/{image_name}")
+        plt.close()
 
         for attack, results in metrics.items():
             rows.append(
