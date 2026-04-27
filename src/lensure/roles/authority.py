@@ -70,8 +70,7 @@ class Authority:
                 hashes.SHA256(),
             )
             return True
-        except Exception as e:
-            print("Exception when could not verify is: ", e)
+        except Exception:
             return False
 
     def include_watermarking(self, image: Image) -> Image:
