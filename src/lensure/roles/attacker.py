@@ -81,5 +81,5 @@ class Attacker:
         parent_folder = "/".join(self.original_image_path.split("/")[:-1])
         choice = parent_folder + "/" + rng.choice(os.listdir(parent_folder))
         while choice == self.original_image_path:
-            choice = parent_folder + rng.choice(os.listdir(parent_folder))
+            choice = parent_folder + "/" + rng.choice(os.listdir(parent_folder))
         return Image.open(choice)
