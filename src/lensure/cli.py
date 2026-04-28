@@ -71,7 +71,12 @@ def run_experiment(
 
 
 @app.command()
-def complete_execution(images_path: str, output_path: str, embed_og_hash: bool = True):
+def complete_execution(
+    images_path: str,
+    output_path: str,
+    embed_og_hash: bool = True,
+    embed_method: str = "LSB",
+):
     """
     Performs a complete execution and saves all the results
     to a posterior analysis.
@@ -83,7 +88,10 @@ def complete_execution(images_path: str, output_path: str, embed_og_hash: bool =
 
     for image_name in tqdm(os.listdir(images_path)):
         metrics, fig = run_experiment(
-            images_path + image_name, embed_og_hash, save_results=True
+            images_path + image_name,
+            embed_og_hash,
+            save_results=True,
+            embed_method=embed_method,
         )
         fig.savefig(f"{output_path}/{plots_path}/{image_name}")
         plt.close()
