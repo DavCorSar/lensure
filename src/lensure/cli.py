@@ -22,7 +22,10 @@ app = typer.Typer()
 
 @app.command()
 def run_experiment(
-    image_path: str, embed_og_hash: bool = True, save_results: bool = False
+    image_path: str,
+    embed_og_hash: bool = True,
+    save_results: bool = False,
+    embed_method: str = "LSB",
 ) -> tuple[dict, plt.Figure] | None:
     """
     Performs an attack simulation over the specifyied image
@@ -30,11 +33,11 @@ def run_experiment(
 
     img = Image.open(image_path)
 
-    authority = Authority(embed_og_hash)
+    authority = Authority(embed_og_hash, embed_method=embed_method)
     attacker = Attacker(img, original_image_path=image_path)
     user = User(authority)
 
-    watermarked_image = authority.include_watermarking(img)
+    watermarked_image = authority.embed_watermark(img)
 
     attacks = ["original", "jpeg", "resize", "blur", "noise", "change"]
 
