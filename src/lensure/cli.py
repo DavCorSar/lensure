@@ -22,7 +22,10 @@ app = typer.Typer()
 
 @app.command()
 def run_experiment(
-    image_path: str, embed_og_hash: bool = True, save_results: bool = False
+    image_path: str,
+    embed_og_hash: bool = True,
+    save_results: bool = False,
+    embed_method: str = "DWT",
 ) -> tuple[dict, plt.Figure] | None:
     """
     Performs an attack simulation over the specifyied image
@@ -30,11 +33,11 @@ def run_experiment(
 
     img = Image.open(image_path)
 
-    authority = Authority(embed_og_hash)
+    authority = Authority(embed_og_hash, embed_method=embed_method)
     attacker = Attacker(img, original_image_path=image_path)
     user = User(authority)
 
-    watermarked_image = authority.include_watermarking(img)
+    watermarked_image = authority.embed_watermark(img)
 
     attacks = ["original", "jpeg", "resize", "blur", "noise", "change"]
 
@@ -68,7 +71,12 @@ def run_experiment(
 
 
 @app.command()
-def complete_execution(images_path: str, output_path: str, embed_og_hash: bool = True):
+def complete_execution(
+    images_path: str,
+    output_path: str,
+    embed_og_hash: bool = True,
+    embed_method: str = "DWT",
+):
     """
     Performs a complete execution and saves all the results
     to a posterior analysis.
@@ -80,7 +88,10 @@ def complete_execution(images_path: str, output_path: str, embed_og_hash: bool =
 
     for image_name in tqdm(os.listdir(images_path)):
         metrics, fig = run_experiment(
-            images_path + image_name, embed_og_hash, save_results=True
+            images_path + image_name,
+            embed_og_hash,
+            save_results=True,
+            embed_method=embed_method,
         )
         fig.savefig(f"{output_path}/{plots_path}/{image_name}")
         plt.close()
