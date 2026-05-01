@@ -25,7 +25,7 @@ def run_experiment(
     image_path: str,
     embed_og_hash: bool = True,
     save_results: bool = False,
-    embed_method: str = "LSB",
+    embed_method: str = "DWT",
 ) -> tuple[dict, plt.Figure] | None:
     """
     Performs an attack simulation over the specifyied image
@@ -75,7 +75,7 @@ def complete_execution(
     images_path: str,
     output_path: str,
     embed_og_hash: bool = True,
-    embed_method: str = "LSB",
+    embed_method: str = "DWT",
 ):
     """
     Performs a complete execution and saves all the results

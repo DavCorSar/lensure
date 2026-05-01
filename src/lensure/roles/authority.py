@@ -26,7 +26,7 @@ class Authority:
         embed_og_hash: bool,
         public_exponent: int = 65537,
         key_size: int = 2048,
-        embed_method: str = "LSB",
+        embed_method: str = "DWT",
     ):
         self.embed_og_hash = embed_og_hash
         self._private_key, self.public_key = self.generate_keys(
