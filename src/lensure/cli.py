@@ -34,12 +34,21 @@ def run_experiment(
     img = Image.open(image_path)
 
     authority = Authority(embed_og_hash, embed_method=embed_method)
-    attacker = Attacker(img, original_image_path=image_path)
-    user = User(authority)
 
     watermarked_image = authority.embed_watermark(img)
+    attacker = Attacker(watermarked_image, original_image_path=image_path)
+    user = User(authority)
 
-    attacks = ["original", "jpeg", "resize", "blur", "noise", "change"]
+    attacks = [
+        "original",
+        "jpeg",
+        "resize",
+        "blur",
+        "noise",
+        "semantic-transformation-soft",
+        "semantic-transformation-hard",
+        "change",
+    ]
 
     fig = plt.figure(figsize=(15, 6))
 
@@ -47,7 +56,7 @@ def run_experiment(
     for i, attack_type in enumerate(attacks):
         modifyied_image = attacker.apply_attack(attack_type)
 
-        result = user.verify(modifyied_image, watermarked_image)
+        result = user.verify(modifyied_image)
 
         if not save_results:
             print(f"\n[{attack_type}]")
@@ -55,7 +64,7 @@ def run_experiment(
             print("signature valid:", result["signature_valid"])
             print("accepted:", result["accepted"])
 
-        ax = fig.add_subplot(1, len(attacks), i + 1)
+        ax = fig.add_subplot(round(len(attacks) / 4), 4, i + 1)
         ax.imshow(modifyied_image, cmap="gray")
         ax.set_title(
             f"{attack_type}\nD={result['distance']}\nAccepted={result['accepted']}"
