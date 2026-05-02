@@ -64,6 +64,9 @@ def run_experiment(
             print("signature valid:", result["signature_valid"])
             print("accepted:", result["accepted"])
 
+            if "decode_error" in result:
+                print("decode error:", result["decode_error"])
+
         ax = fig.add_subplot(round(len(attacks) / 4), 4, i + 1)
         ax.imshow(modifyied_image, cmap="gray")
         ax.set_title(
