@@ -24,6 +24,14 @@ class User:
         h_new = Authority.compute_perceptual_hash(attacked_image)
         result = self.authority.extract_watermark(attacked_image)
 
+        if "decode_error" in result:
+            return {
+                "signature_valid": False,
+                "distance": 64,
+                "accepted": False,
+                "decode_error": result["decode_error"],
+            }
+
         if self.authority.embed_og_hash:
             valid_sig = self.authority.verify_signature(
                 result["hash"], result["signature"]
