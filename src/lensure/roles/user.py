@@ -17,14 +17,12 @@ class User:
     def __init__(self, authority: Authority):
         self.authority = authority
 
-    def verify(
-        self, attacked_image: Image, watermarked_image: Image, threshold=10
-    ) -> dict:
+    def verify(self, attacked_image: Image, threshold=10) -> dict:
         """
         The user has access to the CA at any time to validate the image
         """
         h_new = Authority.compute_perceptual_hash(attacked_image)
-        result = self.authority.extract_watermark(watermarked_image)
+        result = self.authority.extract_watermark(attacked_image)
 
         if self.authority.embed_og_hash:
             valid_sig = self.authority.verify_signature(
