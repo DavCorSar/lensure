@@ -36,13 +36,13 @@ class Attacker:
             result = self.__convert_to_jpg()
 
         if attack_type == "resize":
-            result = self.__downsize_image(2)
+            result = self.__resize_image(1.1)
 
         if attack_type == "blur":
-            result = self.image.filter(ImageFilter.GaussianBlur(radius=5))
+            result = self.image.filter(ImageFilter.GaussianBlur(radius=1))
 
         if attack_type == "noise":
-            result = self.__add_noise(0, 10)
+            result = self.__add_noise(0, 2)
 
         if attack_type == "semantic-transformation-soft":
             result = self.__apply_semantic_transformation(level=2)
@@ -68,12 +68,12 @@ class Attacker:
         buffer.seek(0)
         return Image.open(buffer)
 
-    def __downsize_image(self, factor: int) -> Image:
+    def __resize_image(self, factor: float) -> Image:
         """
         Resizes the image dividing the width and height by the specifyied factor
         """
         return self.image.resize(
-            (self.image.width // factor, self.image.height // factor)
+            (int(self.image.width * factor), int(self.image.height * factor))
         ).resize(self.image.size)
 
     def __add_noise(self, noise_mean: int, noise_std: int) -> Image:
