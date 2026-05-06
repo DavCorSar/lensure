@@ -1,5 +1,14 @@
-from diffusers import StableDiffusionInpaintPipeline
+import huggingface_hub
+import diffusers
+import transformers
+from diffusers import StableDiffusionInpaintPipeline, DPMSolverMultistepScheduler
 import torch
+
+diffusers.logging.set_verbosity_error()
+transformers.logging.set_verbosity_error()
+huggingface_hub.logging.set_verbosity_error()
+diffusers.utils.logging.disable_progress_bar()
+transformers.utils.logging.disable_progress_bar()
 
 
 def get_device() -> str:
@@ -7,9 +16,6 @@ def get_device() -> str:
 
 
 def create_dnn_pipeline() -> StableDiffusionInpaintPipeline:
-    """
-    TODO
-    """
     device = get_device()
 
     model_id = "runwayml/stable-diffusion-inpainting"
@@ -20,12 +26,17 @@ def create_dnn_pipeline() -> StableDiffusionInpaintPipeline:
         model_id,
         torch_dtype=dtype,
         safety_checker=None,
+        local_files_only=True,
+        use_safetensors=False,
     )
 
+    pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+
+    pipe = pipe.to(device)
+
     if device == "cuda":
-        pipe = pipe.to(device)
         pipe.enable_attention_slicing()
-        pipe.enable_vae_slicing()
-    else:
-        pipe = pipe.to(device)
+        pipe.vae.enable_slicing()
+
+    pipe.set_progress_bar_config(disable=True)
     return pipe
