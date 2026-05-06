@@ -13,6 +13,7 @@ from diffusers import StableDiffusionInpaintPipeline
 import torch
 
 from lensure.utils import stable_diffusion_modifyier
+from lensure.utils import social_media
 
 SEED = 42
 
@@ -62,6 +63,12 @@ class Attacker:
 
         if attack_type == "change":
             result = self.__select_different_image()
+
+        if attack_type == "social-bluesky":
+            result = social_media.bluesky_attack(self.image)
+
+        if attack_type == "social-telegram":
+            result = social_media.telegram_attack(self.image)
 
         if result is None:
             raise ValueError(f"Invalid attack type: {attack_type}")

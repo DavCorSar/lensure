@@ -1,3 +1,5 @@
+import math
+
 import matplotlib.pyplot as plt
 from PIL import Image
 from diffusers import StableDiffusionInpaintPipeline
@@ -35,9 +37,11 @@ def run_single_image_execution(
         "semantic-transformation-soft",
         "semantic-transformation-hard",
         "change",
+        "social-bluesky",
+        # "social-telegram",
     ]
 
-    fig = plt.figure(figsize=(15, 6))
+    fig = plt.figure(figsize=(15, 12))
 
     metrics = {}
     for i, attack_type in enumerate(attacks):
@@ -54,7 +58,7 @@ def run_single_image_execution(
             if "decode_error" in result:
                 print("decode error:", result["decode_error"])
 
-        ax = fig.add_subplot(round(len(attacks) / 4), 4, i + 1)
+        ax = fig.add_subplot(math.ceil(len(attacks) / 4), 4, i + 1)
         ax.imshow(modifyied_image, cmap="gray")
         ax.set_title(
             f"{attack_type}\nD={result['distance']}\nAccepted={result['accepted']}"
