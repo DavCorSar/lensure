@@ -12,6 +12,8 @@ import numpy as np
 from diffusers import StableDiffusionInpaintPipeline
 import torch
 
+from lensure.utils import stable_diffusion_modifyier
+
 SEED = 42
 
 
@@ -20,9 +22,17 @@ class Attacker:
     Implements multiple types of attacks
     """
 
-    def __init__(self, image: Image, original_image_path: str):
+    def __init__(
+        self,
+        image: Image,
+        original_image_path: str,
+        pipe: StableDiffusionInpaintPipeline | None = None,
+    ):
         self.image = image
         self.original_image_path = original_image_path
+        if pipe is None:
+            pipe = stable_diffusion_modifyier.create_dnn_pipeline()
+        self.pipe = pipe
 
     def apply_attack(self, attack_type) -> Image:
         """
@@ -90,24 +100,6 @@ class Attacker:
         """
         Applyies a malicious semantic transformation to the image.
         """
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        model_id = "runwayml/stable-diffusion-inpainting"
-
-        dtype = torch.float16 if device == "cuda" else torch.float32
-
-        pipe = StableDiffusionInpaintPipeline.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            safety_checker=None,
-        )
-
-        if device == "cuda":
-            pipe = pipe.to(device)
-            pipe.enable_attention_slicing()
-            pipe.enable_vae_slicing()
-        else:
-            pipe = pipe.to(device)
 
         original_size = self.image.size
 
@@ -127,10 +119,10 @@ class Attacker:
             "deformed face, low quality, blurry, unrealistic, artifacts"
         )
 
-        generator_device = device if device == "cuda" else "cpu"
+        generator_device = stable_diffusion_modifyier.get_device()
         generator = torch.Generator(device=generator_device).manual_seed(SEED)
 
-        result = pipe(
+        result = self.pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
             image=image,
