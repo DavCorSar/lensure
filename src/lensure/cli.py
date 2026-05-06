@@ -6,14 +6,12 @@ import os
 
 import matplotlib
 import matplotlib.pyplot as plt
-from PIL import Image
 import typer
 from tqdm import tqdm
 import polars as pl
 
-from lensure.roles.authority import Authority
-from lensure.roles.attacker import Attacker
-from lensure.roles.user import User
+from lensure.utils import stable_diffusion_modifyier
+from lensure.utils import pipelines
 
 matplotlib.use("TkAgg")
 
@@ -31,43 +29,12 @@ def run_experiment(
     Performs an attack simulation over the specifyied image
     """
 
-    img = Image.open(image_path)
-
-    authority = Authority(embed_og_hash, embed_method=embed_method)
-    attacker = Attacker(img, original_image_path=image_path)
-    user = User(authority)
-
-    watermarked_image = authority.embed_watermark(img)
-
-    attacks = ["original", "jpeg", "resize", "blur", "noise", "change"]
-
-    fig = plt.figure(figsize=(15, 6))
-
-    metrics = {}
-    for i, attack_type in enumerate(attacks):
-        modifyied_image = attacker.apply_attack(attack_type)
-
-        result = user.verify(modifyied_image, watermarked_image)
-
-        if not save_results:
-            print(f"\n[{attack_type}]")
-            print("distance:", result["distance"])
-            print("signature valid:", result["signature_valid"])
-            print("accepted:", result["accepted"])
-
-        ax = fig.add_subplot(1, len(attacks), i + 1)
-        ax.imshow(modifyied_image, cmap="gray")
-        ax.set_title(
-            f"{attack_type}\nD={result['distance']}\nAccepted={result['accepted']}"
-        )
-        ax.axis("off")
-
-        metrics[attack_type] = result
-
-    if save_results:
-        return metrics, fig
-    plt.show()
-    return None
+    pipelines.run_single_image_execution(
+        image_path=image_path,
+        embed_og_hash=embed_og_hash,
+        save_results=save_results,
+        embed_method=embed_method,
+    )
 
 
 @app.command()
@@ -81,17 +48,19 @@ def complete_execution(
     Performs a complete execution and saves all the results
     to a posterior analysis.
     """
-    plots_path = "plots/"
+    plots_path = "/plots/"
     os.makedirs(output_path, exist_ok=True)
     os.makedirs(output_path + plots_path, exist_ok=True)
+    pipe = stable_diffusion_modifyier.create_dnn_pipeline()
     rows = []
 
     for image_name in tqdm(os.listdir(images_path)):
-        metrics, fig = run_experiment(
+        metrics, fig = pipelines.run_single_image_execution(
             images_path + image_name,
             embed_og_hash,
             save_results=True,
             embed_method=embed_method,
+            pipe=pipe,
         )
         fig.savefig(f"{output_path}/{plots_path}/{image_name}")
         plt.close()

@@ -3,8 +3,6 @@ This module implements the definition of the authority that
 will sign the images.
 """
 
-import struct
-
 from PIL import Image
 import numpy as np
 import imagehash
@@ -27,6 +25,7 @@ class Authority:
         public_exponent: int = 65537,
         key_size: int = 2048,
         embed_method: str = "DWT",
+        delta_dwt: float = 40.0,
     ):
         self.embed_og_hash = embed_og_hash
         self._private_key, self.public_key = self.generate_keys(
@@ -35,6 +34,8 @@ class Authority:
         if embed_method not in VALID_EMBED_METHODS:
             raise ValueError(f"{embed_method} is not a valid method")
         self.embed_method = embed_method
+        self.delta_dwt = delta_dwt
+        self.dwt_repetition = 7
 
     def generate_keys(
         self, public_exponent: int, key_size: int
@@ -66,8 +67,15 @@ class Authority:
         """
         Checks if the signature corresponds with the specifyied hash
         """
-        h = np.asarray(list(h), dtype=np.uint8).flatten()
-        h_bytes = np.packbits(h).tobytes()
+        if signature == b"":
+            return False
+
+        if isinstance(h, str):
+            h_arr = np.array([int(i) for i in h], dtype=np.uint8)
+        else:
+            h_arr = np.asarray(h, dtype=np.uint8).flatten()
+
+        h_bytes = np.packbits(h_arr).tobytes()
 
         try:
             self.public_key.verify(
@@ -92,10 +100,10 @@ class Authority:
         sig = self.sign_hash(h)
 
         if self.embed_og_hash:
-            hash_to_insert = "".join([str(i) for i in h])
-            m = f"{hash_to_insert}|{sig.hex()}"
+            hash_bytes = np.packbits(h).tobytes()
+            m = hash_bytes + sig
         else:
-            m = f"{sig.hex()}"
+            m = sig
 
         encoded = self._encode_message(m)
 
@@ -117,85 +125,65 @@ class Authority:
 
     def _extract_watermark_lsb(self, image: Image) -> dict:
         """
-        Extracts the signature and the original hash
+        Extracts the signature and the original hash without using headers.
         """
         img = np.array(image)
         flat = img.flatten()
 
-        header_bits = flat[:32] & 1
+        expected_len = self._expected_encoded_length()
+        total_bits = expected_len * 8
 
-        header_bytes = np.packbits(header_bits).tobytes()
-
-        length = struct.unpack("I", header_bytes)[0]
-
-        total_bits = (length + 4) * 8
-        bits = flat[:total_bits] & 1
-        bytes_data = np.packbits(bits).tobytes()
-
-        payload = bytes_data[4:]
-
-        rs = reedsolo.RSCodec(10)
-        decoded = rs.decode(payload)[0].decode()
-
-        if self.embed_og_hash:
-            h, sig = decoded.split("|")
+        if total_bits > flat.size:
             return {
-                "hash": np.array([int(i) for i in h]),
-                "signature": bytes.fromhex(sig),
+                "hash": np.zeros(64, dtype=np.uint8),
+                "signature": b"",
+                "decode_error": (
+                    f"Image too small for LSB extraction. "
+                    f"Required bits: {total_bits}, capacity: {flat.size}"
+                ),
             }
 
-        return {"signature": bytes.fromhex(decoded)}
+        bits = flat[:total_bits] & 1
+        payload = np.packbits(bits).tobytes()
 
-    def _extract_watermark_dwt(self, image: Image, delta: float = 20.0) -> dict:
+        return self._decode_payload(payload)
+
+    def _extract_watermark_dwt(self, image: Image) -> dict:
         """
         Extracts the watermark payload from the image using DWT-domain extraction.
         """
-        header_bits = self._extract_dwt_bits(image, 32, delta=delta)
-        header_bytes = np.packbits(header_bits).tobytes()
+        expected_len = self._expected_encoded_length()
+        payload_bits = expected_len * 8
+        total_bits = payload_bits * self.dwt_repetition
 
-        length = struct.unpack("I", header_bytes)[0]
-
-        total_bits = (length + 4) * 8
-        bits = self._extract_dwt_bits(image, total_bits, delta=delta)
-        bytes_data = np.packbits(bits).tobytes()
-
-        payload = bytes_data[4:]
-
-        rs = reedsolo.RSCodec(10)
-        decoded = rs.decode(payload)[0].decode()
-
-        if self.embed_og_hash:
-            h, sig = decoded.split("|")
+        try:
+            raw_bits = self._extract_dwt_bits(image, total_bits)
+        except ValueError as e:
             return {
-                "hash": np.array([int(i) for i in h]),
-                "signature": bytes.fromhex(sig),
+                "hash": np.zeros(64, dtype=np.uint8),
+                "signature": b"",
+                "decode_error": str(e),
             }
 
-        return {"signature": bytes.fromhex(decoded)}
+        if self.dwt_repetition > 1:
+            repeated = raw_bits.reshape(self.dwt_repetition, payload_bits)
+            bits = (repeated.sum(axis=0) >= (self.dwt_repetition // 2 + 1)).astype(
+                np.uint8
+            )
+        else:
+            bits = raw_bits
+        payload = np.packbits(bits).tobytes()
 
-    def _encode_message(self, message: str) -> bytes:
+        return self._decode_payload(payload)
+
+    def _encode_message(self, message: bytes) -> bytes:
         """
-        Encodes message with Reed-Solomon + length header
+        Encodes a binary message with Reed-Solomon
         """
 
-        rs = reedsolo.RSCodec(10)
+        rs = reedsolo.RSCodec(200)
 
-        raw = message.encode()
-        encoded = rs.encode(raw)
-
-        # añadimos header con longitud
-        length = len(encoded)
-        header = struct.pack("I", length)
-
-        return header + encoded
-
-    def _decode_reed_solomon(self, data: bytes) -> str:
-        """
-        Decodes the message using Reed-Solomon
-        """
-        rs = reedsolo.RSCodec(10)
-        decoded = rs.decode(data)[0]
-        return decoded.decode()
+        return rs.encode(message)
 
     def _embed_lsb(self, image: Image, data: bytes) -> Image:
         """
@@ -215,17 +203,20 @@ class Authority:
         img_watermarked = flat.reshape(img.shape)
         return Image.fromarray(img_watermarked.astype(np.uint8))
 
-    def _embed_dwt(self, image: Image, data: bytes, delta: float = 20.0) -> Image:
+    def _embed_dwt(self, image: Image, data: bytes) -> Image:
         """
         Embeds the message using a DWT-domain QIM watermarking scheme.
         """
         channels = image.convert("YCbCr").split()
         y_array = np.array(channels[0]).astype(np.float32)
         shape = y_array.shape
+
         bits = np.unpackbits(np.frombuffer(data, dtype=np.uint8))
+        if self.dwt_repetition > 1:
+            bits = np.tile(bits, self.dwt_repetition)
 
         y_array = self._pad_even_shape(y_array)
-        coeffs = self._embed_bits_in_dwt_coeffs(y_array, bits, delta)
+        coeffs = self._embed_bits_in_dwt_coeffs(y_array, bits)
         marked_y = pywt.idwt2(coeffs, "haar", mode="periodization")
         marked_y = self._to_uint8_image_array(marked_y, shape)
 
@@ -234,9 +225,7 @@ class Authority:
             (Image.fromarray(marked_y, mode="L"), channels[1], channels[2]),
         ).convert("RGB")
 
-    def _extract_dwt_bits(
-        self, image: Image, num_bits: int, delta: float = 20.0
-    ) -> np.ndarray:
+    def _extract_dwt_bits(self, image: Image, num_bits: int) -> np.ndarray:
         """
         Extracts num_bits from the DWT-domain watermark using QIM parity decoding.
         """
@@ -248,13 +237,14 @@ class Authority:
         if num_bits > coeff_vector.size:
             raise ValueError(f"Not enough DWT coefficients to extract {num_bits} bits.")
 
-        return self._extract_bits_qim(coeff_vector[:num_bits], delta)
+        positions = self._get_dwt_positions(coeff_vector.size, num_bits)
+
+        return self._extract_bits_qim(coeff_vector[positions], self.delta_dwt)
 
     def _embed_bits_in_dwt_coeffs(
         self,
         y_array: np.ndarray,
         bits: np.ndarray,
-        delta: float,
     ) -> tuple:
         """
         Embeds bits into the LH and HL DWT subbands.
@@ -264,16 +254,10 @@ class Authority:
 
         coeff_vector = np.concatenate((lh_coeffs.ravel(), hl_coeffs.ravel()))
 
-        if bits.size > coeff_vector.size:
-            raise ValueError(
-                f"Image is too small for the DWT watermarking. "
-                f"Required bits: {bits.size}, capacity: {coeff_vector.size}"
-            )
+        positions = self._get_dwt_positions(coeff_vector.size, bits.size)
 
-        coeff_vector[: bits.size] = self._embed_bits_qim(
-            coeff_vector[: bits.size],
-            bits,
-            delta,
+        coeff_vector[positions] = self._embed_bits_qim(
+            coeff_vector[positions], bits, self.delta_dwt
         )
 
         return (
@@ -284,6 +268,91 @@ class Authority:
                 hh_coeffs,
             ),
         )
+
+    def _expected_encoded_length(self) -> int:
+        """
+        Returns the expected encoded payload length in bytes.
+        """
+        sig_len = self.public_key.key_size // 8
+
+        if self.embed_og_hash:
+            raw_len = 8 + sig_len
+        else:
+            raw_len = sig_len
+
+        rs = reedsolo.RSCodec(200)
+        dummy = b"\x00" * raw_len
+        return len(rs.encode(dummy))
+
+    def _decode_payload(self, payload: bytes) -> dict:
+        """
+        Decodes a Reed-Solomon protected binary payload.
+        """
+        rs = reedsolo.RSCodec(200)
+
+        try:
+            decoded = rs.decode(payload)[0]
+        except reedsolo.ReedSolomonError as e:
+            return {
+                "hash": np.zeros(64, dtype=np.uint8),
+                "signature": b"",
+                "decode_error": f"Reed-Solomon failed: {e}",
+            }
+
+        sig_len = self.public_key.key_size // 8
+
+        if self.embed_og_hash:
+            hash_bytes = decoded[:8]
+            signature = decoded[8 : 8 + sig_len]
+
+            if len(hash_bytes) != 8:
+                return {
+                    "hash": np.zeros(64, dtype=np.uint8),
+                    "signature": b"",
+                    "decode_error": f"Invalid hash length: {len(hash_bytes)}",
+                }
+
+            if len(signature) != sig_len:
+                return {
+                    "hash": np.zeros(64, dtype=np.uint8),
+                    "signature": b"",
+                    "decode_error": (
+                        f"Invalid signature length: {len(signature)}, "
+                        f"expected {sig_len}"
+                    ),
+                }
+
+            h = np.unpackbits(np.frombuffer(hash_bytes, dtype=np.uint8))
+
+            return {
+                "hash": h.astype(np.uint8),
+                "signature": signature,
+            }
+
+        signature = decoded[:sig_len]
+
+        if len(signature) != sig_len:
+            return {
+                "signature": b"",
+                "decode_error": (
+                    f"Invalid signature length: {len(signature)}, expected {sig_len}"
+                ),
+            }
+
+        return {"signature": signature}
+
+    def _get_dwt_positions(self, capacity: int, num_bits: int) -> np.ndarray:
+        """
+        Returns deterministic pseudo-random coefficient positions for DWT embedding.
+        """
+        if num_bits > capacity:
+            raise ValueError(
+                f"Not enough DWT coefficients. Required bits: {num_bits}, "
+                f"capacity: {capacity}"
+            )
+
+        rng = np.random.default_rng(42)
+        return rng.permutation(capacity)[:num_bits]
 
     @staticmethod
     def compute_perceptual_hash(image: Image) -> np.ndarray:
@@ -318,9 +387,7 @@ class Authority:
 
     @staticmethod
     def _embed_bits_qim(
-        coefficients: np.ndarray,
-        bits: np.ndarray,
-        delta: float,
+        coefficients: np.ndarray, bits: np.ndarray, delta: float
     ) -> np.ndarray:
         """
         Embeds bits into coefficients using parity-based QIM.
