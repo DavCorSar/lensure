@@ -127,7 +127,7 @@ class Attacker:
             negative_prompt=negative_prompt,
             image=image,
             mask_image=mask,
-            num_inference_steps=25,
+            num_inference_steps=10,
             guidance_scale=7.5,
             generator=generator,
         ).images[0]
