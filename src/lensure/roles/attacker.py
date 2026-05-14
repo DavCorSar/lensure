@@ -12,6 +12,7 @@ import numpy as np
 from diffusers import StableDiffusionInpaintPipeline
 import torch
 
+from lensure.utils import pipelines
 from lensure.utils import stable_diffusion_modifyier
 from lensure.utils import social_media
 
@@ -56,10 +57,30 @@ class Attacker:
             result = self.__add_noise(0, 2)
 
         if attack_type == "semantic-transformation-soft":
-            result = self.__apply_semantic_transformation(level=2)
+            result = self.__apply_semantic_transformation(
+                coverage=0.15,
+                prompt=(
+                    "a realistic human face looking naturally at the camera, "
+                    "same lighting, same perspective, photorealistic"
+                ),
+                negative_prompt=(
+                    "cartoon, anime, distorted face, extra features, deformed, "
+                    "low quality, blurry, unrealistic, artifacts"
+                ),
+            )
 
         if attack_type == "semantic-transformation-hard":
-            result = self.__apply_semantic_transformation(level=1)
+            result = self.__apply_semantic_transformation(
+                coverage=0.25,
+                prompt=(
+                    "a realistic full body person standing naturally in the scene, "
+                    "same lighting, same perspective, photorealistic"
+                ),
+                negative_prompt=(
+                    "cartoon, anime, distorted body, extra limbs, missing limbs, "
+                    "deformed face, low quality, blurry, unrealistic, artifacts"
+                ),
+            )
 
         if attack_type == "change":
             result = self.__select_different_image()
@@ -103,43 +124,45 @@ class Attacker:
         arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
         return Image.fromarray(arr)
 
-    def __apply_semantic_transformation(self, level: int) -> Image:
+    def __apply_semantic_transformation(
+        self, coverage: float, prompt: str, negative_prompt: str
+    ) -> Image:
         """
         Applyies a malicious semantic transformation to the image.
         """
+        image = self.image.convert("RGB")
 
-        original_size = self.image.size
+        mask = self.__generate_person_insertion_mask(image=image, coverage=coverage)
 
-        working_size = (512, 512)
+        bbox = mask.getbbox()
+        if bbox is None:
+            return image
 
-        image = self.image.convert("RGB").resize(working_size, Image.LANCZOS)
+        x0, y0, x1, y1 = bbox
+        crop = image.crop(bbox)
+        mask_crop = mask.crop(bbox)
 
-        mask = self.__generate_person_insertion_mask(image=image, level=level)
-
-        prompt = (
-            "a realistic full body person standing naturally in the scene, "
-            "same lighting, same perspective, photorealistic"
-        )
-
-        negative_prompt = (
-            "cartoon, anime, distorted body, extra limbs, missing limbs, "
-            "deformed face, low quality, blurry, unrealistic, artifacts"
-        )
+        sd_size = (512, 512)
+        crop_sd = crop.resize(sd_size, Image.LANCZOS)
+        mask_sd = mask_crop.resize(sd_size, Image.NEAREST)
 
         generator_device = stable_diffusion_modifyier.get_device()
         generator = torch.Generator(device=generator_device).manual_seed(SEED)
 
-        result = self.pipe(
+        result_sd = self.pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
-            image=image,
-            mask_image=mask,
+            image=crop_sd,
+            mask_image=mask_sd,
             num_inference_steps=10,
             guidance_scale=7.5,
             generator=generator,
         ).images[0]
 
-        result = result.resize(original_size, Image.LANCZOS)
+        result_crop = result_sd.resize(crop.size, Image.LANCZOS)
+
+        result = image.copy()
+        result.paste(result_crop, (x0, y0), mask_crop)
 
         return result
 
@@ -152,10 +175,10 @@ class Attacker:
         choice = parent_folder + "/" + rng.choice(os.listdir(parent_folder))
         while choice == self.original_image_path:
             choice = parent_folder + "/" + rng.choice(os.listdir(parent_folder))
-        return Image.open(choice)
+        return pipelines.load_image_from_path(choice)
 
     def __generate_person_insertion_mask(
-        self, image: Image.Image, level: int
+        self, image: Image.Image, coverage: float
     ) -> Image.Image:
         """
         Generates an automatic mask where a person-like object can be inserted.
@@ -167,8 +190,9 @@ class Attacker:
         ----------
         image : Image.Image
             Input image.
-        seed : int
-            Random seed for reproducibility.
+        coverage : float
+            Fraction of the total image area covered by the mask ellipse
+            bounding box (e.g. 0.10 = 10 %).
 
         Returns
         -------
@@ -180,8 +204,9 @@ class Attacker:
 
         width, height = image.size
 
-        mask_width = int(width / level)
-        mask_height = int(height / level)
+        # mask_width * mask_height = coverage * width * height (aspect ratio preserved)
+        mask_width = int(width * coverage**0.5)
+        mask_height = int(height * coverage**0.5)
 
         x_min = int(width * 0.15)
         x_max = int(width * 0.85) - mask_width
