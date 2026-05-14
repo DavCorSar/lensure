@@ -55,26 +55,29 @@ def complete_execution(
     rows = []
 
     for image_name in tqdm(os.listdir(images_path)):
-        metrics, fig = pipelines.run_single_image_execution(
-            images_path + image_name,
-            embed_og_hash,
-            save_results=True,
-            embed_method=embed_method,
-            pipe=pipe,
-        )
-        fig.savefig(f"{output_path}/{plots_path}/{image_name}")
-        plt.close()
-
-        for attack, results in metrics.items():
-            rows.append(
-                {
-                    "image": image_name,
-                    "attack": attack,
-                    "distance": results["distance"],
-                    "signature_valid": results["signature_valid"],
-                    "accepted": results["accepted"],
-                }
+        try:
+            metrics, fig = pipelines.run_single_image_execution(
+                images_path + image_name,
+                embed_og_hash,
+                save_results=True,
+                embed_method=embed_method,
+                pipe=pipe,
             )
+            fig.savefig(f"{output_path}/{plots_path}/{image_name}")
+            plt.close()
+
+            for attack, results in metrics.items():
+                rows.append(
+                    {
+                        "image": image_name,
+                        "attack": attack,
+                        "distance": results["distance"],
+                        "signature_valid": results["signature_valid"],
+                        "accepted": results["accepted"],
+                    }
+                )
+        except Exception as e:
+            print(f"Error {e} in image {image_name}")
 
     df = pl.DataFrame(rows)
     df.write_csv(os.path.join(output_path, "results.csv"))
