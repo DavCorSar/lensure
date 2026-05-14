@@ -9,6 +9,15 @@ from lensure.roles.attacker import Attacker
 from lensure.roles.user import User
 
 
+def load_image_from_path(image_path: str, max_side: int = 1280) -> Image.Image:
+    img = Image.open(image_path)
+    w, h = img.size
+    if max(w, h) > max_side:
+        scale = max_side / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    return img
+
+
 def run_single_image_execution(
     image_path: str,
     embed_og_hash: bool = True,
@@ -20,7 +29,7 @@ def run_single_image_execution(
     Performs an attack simulation over the specifyied image
     """
 
-    img = Image.open(image_path)
+    img = load_image_from_path(image_path)
 
     authority = Authority(embed_og_hash, embed_method=embed_method)
 
