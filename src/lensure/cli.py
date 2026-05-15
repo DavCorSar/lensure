@@ -12,6 +12,7 @@ import polars as pl
 
 from lensure.utils import stable_diffusion_modifyier
 from lensure.utils import pipelines
+from lensure.utils.social_media import create_bluesky_client_pool
 
 matplotlib.use("TkAgg")
 
@@ -52,6 +53,7 @@ def complete_execution(
     os.makedirs(output_path, exist_ok=True)
     os.makedirs(output_path + plots_path, exist_ok=True)
     pipe = stable_diffusion_modifyier.create_dnn_pipeline()
+    bluesky_client_pool = create_bluesky_client_pool()
     rows = []
 
     for image_name in tqdm(os.listdir(images_path)):
@@ -62,6 +64,7 @@ def complete_execution(
                 save_results=True,
                 embed_method=embed_method,
                 pipe=pipe,
+                bluesky_client_pool=bluesky_client_pool,
             )
             fig.savefig(f"{output_path}/{plots_path}/{image_name}")
             plt.close()
@@ -78,6 +81,7 @@ def complete_execution(
                 )
         except Exception as e:
             print(f"Error {e} in image {image_name}")
+            plt.close()
 
     df = pl.DataFrame(rows)
     df.write_csv(os.path.join(output_path, "results.csv"))
