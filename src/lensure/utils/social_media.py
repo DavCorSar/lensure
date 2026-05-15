@@ -17,23 +17,59 @@ from atproto import models as atproto_models
 load_dotenv()
 
 
-def bluesky_attack(image: Image.Image) -> Image.Image:
-    """
-    Uploads the image to Bluesky and returns the version served by their CDN,
-    which applies JPEG compression and may resize the image.
-    The post is deleted after downloading the result.
-    """
-    handle = os.environ.get("BLUESKY_HANDLE")
-    password = os.environ.get("BLUESKY_APP_PASSWORD")
+class BlueskyClientPool:
+    def __init__(self, clients: list[BlueskyClient]):
+        if not clients:
+            raise ValueError("At least one Bluesky client is required")
+        self._clients = clients
+        self._index = 0
 
-    if not handle or not password:
+    @property
+    def current(self) -> BlueskyClient:
+        return self._clients[self._index]
+
+    def rotate(self) -> None:
+        next_index = (self._index + 1) % len(self._clients)
+        if next_index == self._index:
+            raise RuntimeError("All Bluesky accounts have hit the rate limit")
+        print(f"[bluesky] Rate limit hit on account {self._index + 1}/{len(self._clients)}, rotating...")
+        self._index = next_index
+
+    def __len__(self) -> int:
+        return len(self._clients)
+
+
+def create_bluesky_client_pool() -> BlueskyClientPool:
+    handles_raw = os.environ.get("BLUESKY_HANDLES", "")
+    passwords_raw = os.environ.get("BLUESKY_APP_PASSWORDS", "")
+
+    handles = [h.strip() for h in handles_raw.split(",") if h.strip()]
+    passwords = [p.strip() for p in passwords_raw.split(",") if p.strip()]
+
+    if not handles or not passwords:
         raise EnvironmentError(
-            "BLUESKY_HANDLE and BLUESKY_APP_PASSWORD must be set in .env"
+            "BLUESKY_HANDLES and BLUESKY_APP_PASSWORDS must be set in .env"
+        )
+    if len(handles) != len(passwords):
+        raise EnvironmentError(
+            "BLUESKY_HANDLES and BLUESKY_APP_PASSWORDS must have the same number of entries"
         )
 
-    client = BlueskyClient()
-    client.login(handle, password)
+    clients = []
+    for handle, password in zip(handles, passwords):
+        client = BlueskyClient()
+        client.login(handle, password)
+        clients.append(client)
 
+    return BlueskyClientPool(clients)
+
+
+def _is_rate_limit_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return "429" in msg or "rate limit" in msg or "ratelimit" in msg
+
+
+def _upload_to_bluesky(image: Image.Image, client: BlueskyClient) -> Image.Image:
     buf = io.BytesIO()
     image.convert("RGB").save(buf, format="JPEG", quality=95)
     buf.seek(0)
@@ -57,6 +93,28 @@ def bluesky_attack(image: Image.Image) -> Image.Image:
     client.delete_post(post.uri)
 
     return Image.open(io.BytesIO(response.content)).convert("RGB")
+
+
+def bluesky_attack(image: Image.Image, client_pool: BlueskyClientPool | None = None) -> Image.Image:
+    """
+    Uploads the image to Bluesky and returns the version served by their CDN,
+    which applies JPEG compression and may resize the image.
+    The post is deleted after downloading the result.
+
+    Pass a pre-authenticated BlueskyClientPool to avoid login calls on every
+    invocation and to enable automatic rotation on rate limit errors.
+    """
+    if client_pool is None:
+        client_pool = create_bluesky_client_pool()
+
+    for attempt in range(len(client_pool)):
+        try:
+            return _upload_to_bluesky(image, client_pool.current)
+        except Exception as e:
+            if _is_rate_limit_error(e) and attempt < len(client_pool) - 1:
+                client_pool.rotate()
+            else:
+                raise
 
 
 def telegram_attack(image: Image.Image) -> Image.Image:
