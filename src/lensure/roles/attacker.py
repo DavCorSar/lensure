@@ -15,6 +15,7 @@ import torch
 from lensure.utils import pipelines
 from lensure.utils import stable_diffusion_modifyier
 from lensure.utils import social_media
+from lensure.utils.social_media import BlueskyClientPool
 
 SEED = 42
 
@@ -29,12 +30,14 @@ class Attacker:
         image: Image,
         original_image_path: str,
         pipe: StableDiffusionInpaintPipeline | None = None,
+        bluesky_client_pool: BlueskyClientPool | None = None,
     ):
         self.image = image
         self.original_image_path = original_image_path
         if pipe is None:
             pipe = stable_diffusion_modifyier.create_dnn_pipeline()
         self.pipe = pipe
+        self.bluesky_client_pool = bluesky_client_pool
 
     def apply_attack(self, attack_type) -> Image:
         """
@@ -86,7 +89,7 @@ class Attacker:
             result = self.__select_different_image()
 
         if attack_type == "social-bluesky":
-            result = social_media.bluesky_attack(self.image)
+            result = social_media.bluesky_attack(self.image, client_pool=self.bluesky_client_pool)
 
         if attack_type == "social-telegram":
             result = social_media.telegram_attack(self.image)
