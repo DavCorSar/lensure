@@ -12,7 +12,6 @@ import numpy as np
 from diffusers import StableDiffusionInpaintPipeline
 import torch
 
-from lensure.utils import pipelines
 from lensure.utils import stable_diffusion_modifyier
 from lensure.utils import social_media
 from lensure.utils.social_media import BlueskyClientPool
@@ -34,14 +33,18 @@ class Attacker:
     ):
         self.image = image
         self.original_image_path = original_image_path
-        if pipe is None:
-            pipe = stable_diffusion_modifyier.create_dnn_pipeline()
-        self.pipe = pipe
+        self._pipe = pipe
         self.bluesky_client_pool = bluesky_client_pool
+
+    @property
+    def pipe(self):
+        if self._pipe is None:
+            self._pipe = stable_diffusion_modifyier.create_dnn_pipeline()
+        return self._pipe
 
     def apply_attack(self, attack_type) -> Image:
         """
-        Applies the specifyied attack to the image
+        Applies the specified attack to the image
         """
         result = None
         if attack_type == "original":
@@ -89,29 +92,72 @@ class Attacker:
             result = self.__select_different_image()
 
         if attack_type == "social-bluesky":
-            result = social_media.bluesky_attack(self.image, client_pool=self.bluesky_client_pool)
+            result = social_media.bluesky_attack(
+                self.image, client_pool=self.bluesky_client_pool
+            )
 
         if attack_type == "social-telegram":
             result = social_media.telegram_attack(self.image)
+
+        if attack_type == "jpeg-q70":
+            result = self.__convert_to_jpg(quality=70)
+
+        if attack_type == "jpeg-q80":
+            result = self.__convert_to_jpg(quality=80)
+
+        if attack_type == "jpeg-q60":
+            result = self.__convert_to_jpg(quality=60)
+
+        if attack_type == "jpeg-q50":
+            result = self.__convert_to_jpg(quality=50)
+
+        if attack_type == "resize-down":
+            result = self.__resize_image(0.9)
+
+        if attack_type == "webp":
+            result = self.__convert_to_webp()
+
+        if attack_type == "brightness-plus":
+            result = self.__adjust_brightness(1.10)
+
+        if attack_type == "brightness-minus":
+            result = self.__adjust_brightness(0.90)
 
         if result is None:
             raise ValueError(f"Invalid attack type: {attack_type}")
 
         return result
 
-    def __convert_to_jpg(self) -> Image:
+    def __convert_to_jpg(self, quality: int = 90) -> Image:
         """
         Returns the same image after being saved in JPEG,
         which applies a lossy compression
         """
         buffer = io.BytesIO()
-        self.image.save(buffer, format="JPEG", quality=90)
+        self.image.save(buffer, format="JPEG", quality=quality)
         buffer.seek(0)
         return Image.open(buffer)
 
+    def __convert_to_webp(self, quality: int = 80) -> Image:
+        """
+        Returns the same image after being saved as WebP at the given quality.
+        """
+        buffer = io.BytesIO()
+        self.image.convert("RGB").save(buffer, format="WEBP", quality=quality)
+        buffer.seek(0)
+        return Image.open(buffer).convert("RGB")
+
+    def __adjust_brightness(self, factor: float) -> Image:
+        """
+        Multiplies pixel values by factor, simulating brightness adjustment.
+        """
+        arr = np.array(self.image).astype(np.float32)
+        arr = np.clip(arr * factor, 0, 255).astype(np.uint8)
+        return Image.fromarray(arr)
+
     def __resize_image(self, factor: float) -> Image:
         """
-        Resizes the image dividing the width and height by the specifyied factor
+        Resizes the image dividing the width and height by the specified factor
         """
         return self.image.resize(
             (int(self.image.width * factor), int(self.image.height * factor))
@@ -173,12 +219,14 @@ class Attacker:
         """
         Returns a different image from the same folder
         """
+        from lensure.utils.pipelines import load_image_from_path
+
         rng = np.random.default_rng(SEED)
         parent_folder = "/".join(self.original_image_path.split("/")[:-1])
         choice = parent_folder + "/" + rng.choice(os.listdir(parent_folder))
         while choice == self.original_image_path:
             choice = parent_folder + "/" + rng.choice(os.listdir(parent_folder))
-        return pipelines.load_image_from_path(choice)
+        return load_image_from_path(choice)
 
     def __generate_person_insertion_mask(
         self, image: Image.Image, coverage: float
