@@ -7,6 +7,7 @@ from diffusers import StableDiffusionInpaintPipeline
 from lensure.roles.authority import Authority
 from lensure.roles.attacker import Attacker
 from lensure.roles.user import User
+from lensure.settings import Settings
 
 
 def load_image_from_path(image_path: str, max_side: int = 1280) -> Image.Image:
@@ -20,35 +21,38 @@ def load_image_from_path(image_path: str, max_side: int = 1280) -> Image.Image:
 
 def run_single_image_execution(
     image_path: str,
-    embed_og_hash: bool = True,
+    settings: Settings | None = None,
     save_results: bool = False,
-    embed_method: str = "DWT",
     pipe: StableDiffusionInpaintPipeline | None = None,
+    bluesky_client_pool=None,
 ) -> tuple[dict, plt.Figure] | None:
     """
-    Performs an attack simulation over the specifyied image
+    Performs an attack simulation over the specified image
     """
+    if settings is None:
+        settings = Settings()
 
     img = load_image_from_path(image_path)
 
-    authority = Authority(embed_og_hash, embed_method=embed_method)
+    authority = Authority(
+        settings.embed_og_hash,
+        embed_method=settings.embed_method,
+        hash_size=settings.hash_size,
+        hash_type=settings.hash_type,
+        delta_dwt=settings.delta_dwt,
+        key_size=settings.key_size,
+    )
 
     watermarked_image = authority.embed_watermark(img)
-    attacker = Attacker(watermarked_image, original_image_path=image_path, pipe=pipe)
+    attacker = Attacker(
+        watermarked_image,
+        original_image_path=image_path,
+        pipe=pipe,
+        bluesky_client_pool=bluesky_client_pool,
+    )
     user = User(authority)
 
-    attacks = [
-        "original",
-        "jpeg",
-        "resize",
-        "blur",
-        "noise",
-        "semantic-transformation-soft",
-        "semantic-transformation-hard",
-        "change",
-        "social-bluesky",
-        # "social-telegram",
-    ]
+    attacks = settings.attacks
 
     fig = plt.figure(figsize=(15, 12))
 
