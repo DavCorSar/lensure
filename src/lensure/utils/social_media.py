@@ -69,6 +69,10 @@ def _is_rate_limit_error(e: Exception) -> bool:
     return "429" in msg or "rate limit" in msg or "ratelimit" in msg
 
 
+_CDN_MAX_RETRIES = 3
+_CDN_RETRY_WAIT = 10  # seconds between CDN download retries
+
+
 def _upload_to_bluesky(image: Image.Image, client: BlueskyClient) -> Image.Image:
     buf = io.BytesIO()
     image.convert("RGB").save(buf, format="JPEG", quality=95)
@@ -87,12 +91,20 @@ def _upload_to_bluesky(image: Image.Image, client: BlueskyClient) -> Image.Image
     cid = upload.blob.ref.link
     cdn_url = f"https://cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@jpeg"
 
-    response = requests.get(cdn_url, timeout=30)
-    response.raise_for_status()
-
-    client.delete_post(post.uri)
-
-    return Image.open(io.BytesIO(response.content)).convert("RGB")
+    try:
+        for attempt in range(_CDN_MAX_RETRIES):
+            try:
+                response = requests.get(cdn_url, timeout=30)
+                response.raise_for_status()
+                return Image.open(io.BytesIO(response.content)).convert("RGB")
+            except requests.RequestException as e:
+                if attempt < _CDN_MAX_RETRIES - 1:
+                    print(f"[bluesky] CDN download failed ({e}), retrying in {_CDN_RETRY_WAIT}s...")
+                    time.sleep(_CDN_RETRY_WAIT)
+                else:
+                    raise
+    finally:
+        client.delete_post(post.uri)
 
 
 def bluesky_attack(image: Image.Image, client_pool: BlueskyClientPool | None = None) -> Image.Image:
