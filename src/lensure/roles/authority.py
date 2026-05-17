@@ -12,6 +12,12 @@ import reedsolo
 import pywt
 
 VALID_EMBED_METHODS = ["LSB", "DWT"]
+VALID_HASH_TYPES = ["whash", "phash", "dhash", "ahash"]
+
+# The Y channel is normalised to this size before DWT embedding/extraction so
+# that the coefficient positions are invariant to the input image resolution.
+# Capacity at 512×512: (256×256)×2 = 131 072 coefficients > 70 784 bits needed.
+_DWT_FIXED_SIZE = (512, 512)  # (width, height) in PIL convention
 
 
 class Authority:
@@ -26,6 +32,8 @@ class Authority:
         key_size: int = 2048,
         embed_method: str = "DWT",
         delta_dwt: float = 40.0,
+        hash_size: int = 8,
+        hash_type: str = "whash",
     ):
         self.embed_og_hash = embed_og_hash
         self._private_key, self.public_key = self.generate_keys(
@@ -33,9 +41,15 @@ class Authority:
         )
         if embed_method not in VALID_EMBED_METHODS:
             raise ValueError(f"{embed_method} is not a valid method")
+        if hash_type not in VALID_HASH_TYPES:
+            raise ValueError(
+                f"{hash_type} is not a valid hash type. Choose from {VALID_HASH_TYPES}"
+            )
         self.embed_method = embed_method
         self.delta_dwt = delta_dwt
         self.dwt_repetition = 7
+        self.hash_size = hash_size
+        self.hash_type = hash_type
 
     def generate_keys(
         self, public_exponent: int, key_size: int
@@ -65,7 +79,7 @@ class Authority:
 
     def verify_signature(self, h: str, signature: bytes) -> bool:
         """
-        Checks if the signature corresponds with the specifyied hash
+        Checks if the signature corresponds with the specified hash
         """
         if signature == b"":
             return False
@@ -115,7 +129,7 @@ class Authority:
 
     def extract_watermark(self, image: Image) -> dict:
         """
-        Extracts the signature based on the specifyied method
+        Extracts the signature based on the specified method
         """
         if self.embed_method == "LSB":
             return self._extract_watermark_lsb(image)
@@ -135,7 +149,7 @@ class Authority:
 
         if total_bits > flat.size:
             return {
-                "hash": np.zeros(64, dtype=np.uint8),
+                "hash": np.zeros(self._hash_bits, dtype=np.uint8),
                 "signature": b"",
                 "decode_error": (
                     f"Image too small for LSB extraction. "
@@ -160,7 +174,7 @@ class Authority:
             raw_bits = self._extract_dwt_bits(image, total_bits)
         except ValueError as e:
             return {
-                "hash": np.zeros(64, dtype=np.uint8),
+                "hash": np.zeros(self._hash_bits, dtype=np.uint8),
                 "signature": b"",
                 "decode_error": str(e),
             }
@@ -205,33 +219,36 @@ class Authority:
 
     def _embed_dwt(self, image: Image, data: bytes) -> Image:
         """
-        Embeds the message using a DWT-domain QIM watermarking scheme.
+        Embeds the message using a DWT-domain QIM watermarking scheme in YCbCr space.
+        The Y channel is normalised to _DWT_FIXED_SIZE before the DWT so that
+        embedding positions are invariant to the input resolution.
         """
         channels = image.convert("YCbCr").split()
-        y_array = np.array(channels[0]).astype(np.float32)
-        shape = y_array.shape
+        y = channels[0]
 
         bits = np.unpackbits(np.frombuffer(data, dtype=np.uint8))
         if self.dwt_repetition > 1:
             bits = np.tile(bits, self.dwt_repetition)
 
-        y_array = self._pad_even_shape(y_array)
-        coeffs = self._embed_bits_in_dwt_coeffs(y_array, bits)
-        marked_y = pywt.idwt2(coeffs, "haar", mode="periodization")
-        marked_y = self._to_uint8_image_array(marked_y, shape)
+        y_fixed = np.array(y.resize(_DWT_FIXED_SIZE, Image.LANCZOS)).astype(np.float32)
+        y_padded = self._pad_even_shape(y_fixed)
+        coeffs = self._embed_bits_in_dwt_coeffs(y_padded, bits)
+        marked_y_fixed = pywt.idwt2(coeffs, "haar", mode="periodization")
+        marked_y_fixed = self._to_uint8_image_array(marked_y_fixed, y_fixed.shape)
 
-        return Image.merge(
-            "YCbCr",
-            (Image.fromarray(marked_y, mode="L"), channels[1], channels[2]),
-        ).convert("RGB")
+        marked_y = Image.fromarray(marked_y_fixed, mode="L").resize(
+            y.size, Image.LANCZOS
+        )
+        return Image.merge("YCbCr", (marked_y, channels[1], channels[2])).convert("RGB")
 
     def _extract_dwt_bits(self, image: Image, num_bits: int) -> np.ndarray:
         """
         Extracts num_bits from the DWT-domain watermark using QIM parity decoding.
         """
-        y_array = np.array(image.convert("YCbCr").split()[0]).astype(np.float32)
+        y = image.convert("YCbCr").split()[0]
+        y_fixed = np.array(y.resize(_DWT_FIXED_SIZE, Image.LANCZOS)).astype(np.float32)
         coeff_vector = self._get_dwt_embedding_coefficients(
-            self._pad_even_shape(y_array)
+            self._pad_even_shape(y_fixed)
         )
 
         if num_bits > coeff_vector.size:
@@ -276,7 +293,7 @@ class Authority:
         sig_len = self.public_key.key_size // 8
 
         if self.embed_og_hash:
-            raw_len = 8 + sig_len
+            raw_len = self._hash_bytes + sig_len
         else:
             raw_len = sig_len
 
@@ -294,7 +311,7 @@ class Authority:
             decoded = rs.decode(payload)[0]
         except reedsolo.ReedSolomonError as e:
             return {
-                "hash": np.zeros(64, dtype=np.uint8),
+                "hash": np.zeros(self._hash_bits, dtype=np.uint8),
                 "signature": b"",
                 "decode_error": f"Reed-Solomon failed: {e}",
             }
@@ -302,19 +319,19 @@ class Authority:
         sig_len = self.public_key.key_size // 8
 
         if self.embed_og_hash:
-            hash_bytes = decoded[:8]
-            signature = decoded[8 : 8 + sig_len]
+            hash_bytes = decoded[: self._hash_bytes]
+            signature = decoded[self._hash_bytes : self._hash_bytes + sig_len]
 
-            if len(hash_bytes) != 8:
+            if len(hash_bytes) != self._hash_bytes:
                 return {
-                    "hash": np.zeros(64, dtype=np.uint8),
+                    "hash": np.zeros(self._hash_bits, dtype=np.uint8),
                     "signature": b"",
                     "decode_error": f"Invalid hash length: {len(hash_bytes)}",
                 }
 
             if len(signature) != sig_len:
                 return {
-                    "hash": np.zeros(64, dtype=np.uint8),
+                    "hash": np.zeros(self._hash_bits, dtype=np.uint8),
                     "signature": b"",
                     "decode_error": (
                         f"Invalid signature length: {len(signature)}, "
@@ -354,13 +371,34 @@ class Authority:
         rng = np.random.default_rng(42)
         return rng.permutation(capacity)[:num_bits]
 
-    @staticmethod
-    def compute_perceptual_hash(image: Image) -> np.ndarray:
+    @property
+    def default_threshold(self) -> int:
+        """Threshold for Hamming distance, auto-scaled with hash_size."""
+        return max(1, round(3 * (self.hash_size**2) / 64))
+
+    @property
+    def _hash_bits(self) -> int:
+        return self.hash_size**2
+
+    @property
+    def _hash_bytes(self) -> int:
+        return self._hash_bits // 8
+
+    def compute_perceptual_hash(self, image: Image) -> np.ndarray:
         """
-        Returns the perceptual hash of the image
+        Returns the perceptual hash of the image using the configured hash type and size.
         """
         img = image.convert("L")
-        h = imagehash.whash(img)
+        if self.hash_type == "whash":
+            h = imagehash.whash(img, hash_size=self.hash_size)
+        elif self.hash_type == "phash":
+            h = imagehash.phash(img, hash_size=self.hash_size)
+        elif self.hash_type == "dhash":
+            h = imagehash.dhash(img, hash_size=self.hash_size)
+        elif self.hash_type == "ahash":
+            h = imagehash.average_hash(img, hash_size=self.hash_size)
+        else:
+            raise ValueError(f"Unknown hash type: {self.hash_type}")
         return h.hash.astype(np.uint8).flatten()
 
     @staticmethod
@@ -394,13 +432,8 @@ class Authority:
         """
         quantized = np.round(coefficients / delta).astype(int)
         mismatch = (quantized % 2) != bits
-
-        quantized[mismatch] += np.where(
-            coefficients[mismatch] >= 0,
-            1,
-            -1,
-        )
-
+        r = coefficients - quantized * delta
+        quantized[mismatch] += np.where(r[mismatch] >= 0, 1, -1)
         return quantized * delta
 
     @staticmethod
@@ -416,5 +449,9 @@ class Authority:
     def _extract_bits_qim(coefficients: np.ndarray, delta: float) -> np.ndarray:
         """
         Extracts bits from coefficients using parity-based QIM decoding.
+        Uses round-half-away-from-zero so that coefficients at exactly ±delta/2
+        (caused by uint8 boundary clipping) round to the correct parity.
         """
-        return (np.round(coefficients / delta).astype(int) % 2).astype(np.uint8)
+        return (np.floor(np.abs(coefficients / delta) + 0.5).astype(int) % 2).astype(
+            np.uint8
+        )

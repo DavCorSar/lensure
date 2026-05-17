@@ -23,10 +23,11 @@ def test_perceptual_hash_is_same_with_small_changes():
     """
 
     rng = np.random.default_rng(42)
+    authority = Authority(embed_og_hash=False)
 
     for image_name in os.listdir(IMAGE_PATH):
         img = Image.open(IMAGE_PATH + image_name)
-        hash1 = Authority.compute_perceptual_hash(img)
+        hash1 = authority.compute_perceptual_hash(img)
         img2 = img.copy()
 
         width, height = img2.size
@@ -35,7 +36,7 @@ def test_perceptual_hash_is_same_with_small_changes():
         pixels = img2.load()
         r, g, b = pixels[x, y]
         pixels[x, y] = (min(255, r + 1), g, b)
-        hash2 = Authority.compute_perceptual_hash(img2)
+        hash2 = authority.compute_perceptual_hash(img2)
 
         assert np.sum(hash1 != hash2) == 0
 
@@ -47,10 +48,11 @@ def test_perceptual_hash_changes_with_local_region_modification():
     """
 
     rng = np.random.default_rng(42)
+    authority = Authority(embed_og_hash=False)
 
     for image_name in os.listdir(IMAGE_PATH):
         img = Image.open(IMAGE_PATH + image_name)
-        hash1 = Authority.compute_perceptual_hash(img)
+        hash1 = authority.compute_perceptual_hash(img)
         img2 = img.copy()
 
         pixels = np.array(img2)
@@ -68,7 +70,7 @@ def test_perceptual_hash_changes_with_local_region_modification():
         )
 
         img2 = Image.fromarray(pixels.astype(np.uint8))
-        hash2 = Authority.compute_perceptual_hash(img2)
+        hash2 = authority.compute_perceptual_hash(img2)
 
         assert np.sum(hash1 != hash2) > 0
         assert np.mean(hash1 != hash2) < 0.5

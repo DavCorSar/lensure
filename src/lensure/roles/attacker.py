@@ -13,6 +13,8 @@ from diffusers import StableDiffusionInpaintPipeline
 import torch
 
 from lensure.utils import stable_diffusion_modifyier
+from lensure.utils import social_media
+from lensure.utils.social_media import BlueskyClientPool
 
 SEED = 42
 
@@ -27,16 +29,22 @@ class Attacker:
         image: Image,
         original_image_path: str,
         pipe: StableDiffusionInpaintPipeline | None = None,
+        bluesky_client_pool: BlueskyClientPool | None = None,
     ):
         self.image = image
         self.original_image_path = original_image_path
-        if pipe is None:
-            pipe = stable_diffusion_modifyier.create_dnn_pipeline()
-        self.pipe = pipe
+        self._pipe = pipe
+        self.bluesky_client_pool = bluesky_client_pool
+
+    @property
+    def pipe(self):
+        if self._pipe is None:
+            self._pipe = stable_diffusion_modifyier.create_dnn_pipeline()
+        return self._pipe
 
     def apply_attack(self, attack_type) -> Image:
         """
-        Applies the specifyied attack to the image
+        Applies the specified attack to the image
         """
         result = None
         if attack_type == "original":
@@ -55,32 +63,101 @@ class Attacker:
             result = self.__add_noise(0, 2)
 
         if attack_type == "semantic-transformation-soft":
-            result = self.__apply_semantic_transformation(level=2)
+            result = self.__apply_semantic_transformation(
+                coverage=0.15,
+                prompt=(
+                    "a realistic human face looking naturally at the camera, "
+                    "same lighting, same perspective, photorealistic"
+                ),
+                negative_prompt=(
+                    "cartoon, anime, distorted face, extra features, deformed, "
+                    "low quality, blurry, unrealistic, artifacts"
+                ),
+            )
 
         if attack_type == "semantic-transformation-hard":
-            result = self.__apply_semantic_transformation(level=1)
+            result = self.__apply_semantic_transformation(
+                coverage=0.25,
+                prompt=(
+                    "a realistic full body person standing naturally in the scene, "
+                    "same lighting, same perspective, photorealistic"
+                ),
+                negative_prompt=(
+                    "cartoon, anime, distorted body, extra limbs, missing limbs, "
+                    "deformed face, low quality, blurry, unrealistic, artifacts"
+                ),
+            )
 
         if attack_type == "change":
             result = self.__select_different_image()
+
+        if attack_type == "social-bluesky":
+            result = social_media.bluesky_attack(
+                self.image, client_pool=self.bluesky_client_pool
+            )
+
+        if attack_type == "social-telegram":
+            result = social_media.telegram_attack(self.image)
+
+        if attack_type == "jpeg-q70":
+            result = self.__convert_to_jpg(quality=70)
+
+        if attack_type == "jpeg-q80":
+            result = self.__convert_to_jpg(quality=80)
+
+        if attack_type == "jpeg-q60":
+            result = self.__convert_to_jpg(quality=60)
+
+        if attack_type == "jpeg-q50":
+            result = self.__convert_to_jpg(quality=50)
+
+        if attack_type == "resize-down":
+            result = self.__resize_image(0.9)
+
+        if attack_type == "webp":
+            result = self.__convert_to_webp()
+
+        if attack_type == "brightness-plus":
+            result = self.__adjust_brightness(1.10)
+
+        if attack_type == "brightness-minus":
+            result = self.__adjust_brightness(0.90)
 
         if result is None:
             raise ValueError(f"Invalid attack type: {attack_type}")
 
         return result
 
-    def __convert_to_jpg(self) -> Image:
+    def __convert_to_jpg(self, quality: int = 90) -> Image:
         """
         Returns the same image after being saved in JPEG,
         which applies a lossy compression
         """
         buffer = io.BytesIO()
-        self.image.save(buffer, format="JPEG", quality=90)
+        self.image.save(buffer, format="JPEG", quality=quality)
         buffer.seek(0)
         return Image.open(buffer)
 
+    def __convert_to_webp(self, quality: int = 80) -> Image:
+        """
+        Returns the same image after being saved as WebP at the given quality.
+        """
+        buffer = io.BytesIO()
+        self.image.convert("RGB").save(buffer, format="WEBP", quality=quality)
+        buffer.seek(0)
+        return Image.open(buffer).convert("RGB")
+
+    def __adjust_brightness(self, factor: float) -> Image:
+        """
+        Multiplies pixel values by factor, simulating brightness adjustment.
+        """
+        arr = np.array(self.image).astype(np.float32)
+        arr = np.clip(arr * factor, 0, 255).astype(np.uint8)
+        return Image.fromarray(arr)
+
     def __resize_image(self, factor: float) -> Image:
         """
-        Resizes the image dividing the width and height by the specifyied factor
+        Resizes the image dividing the width and height by the specified factor
         """
         return self.image.resize(
             (int(self.image.width * factor), int(self.image.height * factor))
@@ -96,43 +173,45 @@ class Attacker:
         arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
         return Image.fromarray(arr)
 
-    def __apply_semantic_transformation(self, level: int) -> Image:
+    def __apply_semantic_transformation(
+        self, coverage: float, prompt: str, negative_prompt: str
+    ) -> Image:
         """
         Applyies a malicious semantic transformation to the image.
         """
+        image = self.image.convert("RGB")
 
-        original_size = self.image.size
+        mask = self.__generate_person_insertion_mask(image=image, coverage=coverage)
 
-        working_size = (512, 512)
+        bbox = mask.getbbox()
+        if bbox is None:
+            return image
 
-        image = self.image.convert("RGB").resize(working_size, Image.LANCZOS)
+        x0, y0, x1, y1 = bbox
+        crop = image.crop(bbox)
+        mask_crop = mask.crop(bbox)
 
-        mask = self.__generate_person_insertion_mask(image=image, level=level)
-
-        prompt = (
-            "a realistic full body person standing naturally in the scene, "
-            "same lighting, same perspective, photorealistic"
-        )
-
-        negative_prompt = (
-            "cartoon, anime, distorted body, extra limbs, missing limbs, "
-            "deformed face, low quality, blurry, unrealistic, artifacts"
-        )
+        sd_size = (512, 512)
+        crop_sd = crop.resize(sd_size, Image.LANCZOS)
+        mask_sd = mask_crop.resize(sd_size, Image.NEAREST)
 
         generator_device = stable_diffusion_modifyier.get_device()
         generator = torch.Generator(device=generator_device).manual_seed(SEED)
 
-        result = self.pipe(
+        result_sd = self.pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
-            image=image,
-            mask_image=mask,
+            image=crop_sd,
+            mask_image=mask_sd,
             num_inference_steps=10,
             guidance_scale=7.5,
             generator=generator,
         ).images[0]
 
-        result = result.resize(original_size, Image.LANCZOS)
+        result_crop = result_sd.resize(crop.size, Image.LANCZOS)
+
+        result = image.copy()
+        result.paste(result_crop, (x0, y0), mask_crop)
 
         return result
 
@@ -140,15 +219,17 @@ class Attacker:
         """
         Returns a different image from the same folder
         """
+        from lensure.utils.pipelines import load_image_from_path
+
         rng = np.random.default_rng(SEED)
         parent_folder = "/".join(self.original_image_path.split("/")[:-1])
         choice = parent_folder + "/" + rng.choice(os.listdir(parent_folder))
         while choice == self.original_image_path:
             choice = parent_folder + "/" + rng.choice(os.listdir(parent_folder))
-        return Image.open(choice)
+        return load_image_from_path(choice)
 
     def __generate_person_insertion_mask(
-        self, image: Image.Image, level: int
+        self, image: Image.Image, coverage: float
     ) -> Image.Image:
         """
         Generates an automatic mask where a person-like object can be inserted.
@@ -160,8 +241,9 @@ class Attacker:
         ----------
         image : Image.Image
             Input image.
-        seed : int
-            Random seed for reproducibility.
+        coverage : float
+            Fraction of the total image area covered by the mask ellipse
+            bounding box (e.g. 0.10 = 10 %).
 
         Returns
         -------
@@ -173,8 +255,9 @@ class Attacker:
 
         width, height = image.size
 
-        mask_width = int(width / level)
-        mask_height = int(height / level)
+        # mask_width * mask_height = coverage * width * height (aspect ratio preserved)
+        mask_width = int(width * coverage**0.5)
+        mask_height = int(height * coverage**0.5)
 
         x_min = int(width * 0.15)
         x_max = int(width * 0.85) - mask_width

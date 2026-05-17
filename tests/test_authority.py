@@ -24,20 +24,20 @@ def authority():
 
 
 def test_sign_and_verify_same_hash(authority, image):
-    h = Authority.compute_perceptual_hash(image)
+    h = authority.compute_perceptual_hash(image)
     sig = authority.sign_hash(h)
     assert authority.verify_signature(h, sig)
 
 
 def test_verify_signature_with_empty_signature_returns_false(authority, image):
-    h = Authority.compute_perceptual_hash(image)
+    h = authority.compute_perceptual_hash(image)
     assert not authority.verify_signature(h, b"")
 
 
 def test_verify_signature_from_different_authority_returns_false(image):
     auth1 = Authority(embed_og_hash=False)
     auth2 = Authority(embed_og_hash=False)
-    h = Authority.compute_perceptual_hash(image)
+    h = auth1.compute_perceptual_hash(image)
     sig = auth1.sign_hash(h)
     assert not auth2.verify_signature(h, sig)
 

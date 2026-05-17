@@ -17,11 +17,13 @@ class User:
     def __init__(self, authority: Authority):
         self.authority = authority
 
-    def verify(self, attacked_image: Image, threshold=10) -> dict:
+    def verify(self, attacked_image: Image, threshold: int | None = None) -> dict:
         """
         The user has access to the CA at any time to validate the image
         """
-        h_new = Authority.compute_perceptual_hash(attacked_image)
+        if threshold is None:
+            threshold = self.authority.default_threshold
+        h_new = self.authority.compute_perceptual_hash(attacked_image)
         result = self.authority.extract_watermark(attacked_image)
 
         if "decode_error" in result:

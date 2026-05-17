@@ -71,7 +71,11 @@ def test_invalid_attack_type_raises_value_error(attacker):
 
 
 @pytest.mark.parametrize(
-    "attack_type", ["semantic-transformation-soft", "semantic-transformation-hard"]
+    "attack_type",
+    [
+        "semantic-transformation-soft",
+        "semantic-transformation-hard",
+    ],
 )
 def test_semantic_transformation_calls_pipe_and_returns_original_size(
     attacker, sample_image, mock_pipe, attack_type
