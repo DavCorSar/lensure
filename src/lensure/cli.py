@@ -80,6 +80,8 @@ def complete_execution(
                         "distance": results["distance"],
                         "signature_valid": results["signature_valid"],
                         "accepted": results["accepted"],
+                        "psnr": results["psnr"],
+                        "ssim": results["ssim"],
                     }
                 )
         except Exception as e:

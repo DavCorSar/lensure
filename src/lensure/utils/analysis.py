@@ -31,6 +31,12 @@ def analyze_results(csv_path: str, embed_og_hash: bool, output_dir: str) -> None
     lines.append(f"{'─' * 56}")
     lines.append(f"  {csv_path}")
     lines.append(f"  {total_images} images · {len(attacks)} attacks")
+
+    if "psnr" in df.columns:
+        mean_psnr = df["psnr"].mean()
+        mean_ssim = df["ssim"].mean()
+        lines.append(f"  Watermark quality — PSNR: {mean_psnr:.2f} dB · SSIM: {mean_ssim:.4f}")
+
     lines.append(f"{'─' * 56}")
 
     if embed_og_hash:
