@@ -1,13 +1,23 @@
 import math
 
 import matplotlib.pyplot as plt
+import numpy as np
 from PIL import Image
 from diffusers import StableDiffusionInpaintPipeline
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 from lensure.roles.authority import Authority
 from lensure.roles.attacker import Attacker
 from lensure.roles.user import User
 from lensure.settings import Settings
+
+
+def compute_image_quality(original: Image.Image, watermarked: Image.Image) -> dict:
+    orig = np.array(original.convert("RGB"))
+    wm = np.array(watermarked.convert("RGB"))
+    psnr = peak_signal_noise_ratio(orig, wm, data_range=255)
+    ssim = structural_similarity(orig, wm, channel_axis=2, data_range=255)
+    return {"psnr": round(psnr, 4), "ssim": round(ssim, 6)}
 
 
 def load_image_from_path(image_path: str, max_side: int = 1280) -> Image.Image:
@@ -44,6 +54,7 @@ def run_single_image_execution(
     )
 
     watermarked_image = authority.embed_watermark(img)
+    quality = compute_image_quality(img, watermarked_image)
     attacker = Attacker(
         watermarked_image,
         original_image_path=image_path,
@@ -78,7 +89,7 @@ def run_single_image_execution(
         )
         ax.axis("off")
 
-        metrics[attack_type] = result
+        metrics[attack_type] = {**result, **quality}
 
     if save_results:
         return metrics, fig
