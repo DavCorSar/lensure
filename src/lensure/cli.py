@@ -82,6 +82,7 @@ def complete_execution(
                         "accepted": results["accepted"],
                         "psnr": results["psnr"],
                         "ssim": results["ssim"],
+                        "delta_used": results["delta_used"],
                     }
                 )
         except Exception as e:
