@@ -29,7 +29,7 @@ def test_verify_accepts_clean_lsb_watermark_without_og_hash(image):
     which would break verification in this mode.
     """
     authority = Authority(embed_og_hash=False, embed_method="LSB")
-    watermarked = authority.embed_watermark(image)
+    watermarked, _ = authority.embed_watermark(image)
     result = User(authority).verify(watermarked)
     assert result["accepted"]
     assert result["signature_valid"]
@@ -44,7 +44,7 @@ def test_verify_accepts_clean_dwt_watermark_with_og_hash(image):
     This makes the mode robust to small perceptual shifts introduced by DWT.
     """
     authority = Authority(embed_og_hash=True, embed_method="DWT")
-    watermarked = authority.embed_watermark(image)
+    watermarked, _ = authority.embed_watermark(image)
     result = User(authority).verify(watermarked)
     assert result["accepted"]
     assert result["signature_valid"]
@@ -58,7 +58,7 @@ def test_verify_distance_within_threshold_for_unmodified_dwt_image(image):
     threshold (< 10).
     """
     authority = Authority(embed_og_hash=True, embed_method="DWT")
-    watermarked = authority.embed_watermark(image)
+    watermarked, _ = authority.embed_watermark(image)
     result = User(authority).verify(watermarked)
     assert result["distance"] < 10
 
@@ -70,7 +70,7 @@ def test_verify_rejects_signature_from_different_authority(image):
     """
     auth1 = Authority(embed_og_hash=False, embed_method="LSB")
     auth2 = Authority(embed_og_hash=False, embed_method="LSB")
-    watermarked = auth1.embed_watermark(image)
+    watermarked, _ = auth1.embed_watermark(image)
     result = User(auth2).verify(watermarked)
     assert not result["signature_valid"]
     assert not result["accepted"]
