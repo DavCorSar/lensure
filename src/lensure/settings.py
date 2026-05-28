@@ -38,6 +38,7 @@ class Settings:
     hash_size: int = 8
     hash_type: str = "whash"
     delta_dwt: float = 40.0
+    allow_retries: bool = False
     key_size: int = 2048
     attacks: List[str] = field(default_factory=lambda: list(DEFAULT_ATTACKS))
 

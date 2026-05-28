@@ -56,7 +56,7 @@ def test_embed_watermark_with_og_hash_roundtrip():
         img = Image.open(IMAGE_PATH + image_name)
         authority = Authority(embed_og_hash=True, embed_method="DWT")
 
-        watermarked = authority.embed_watermark(img)
+        watermarked, _ = authority.embed_watermark(img)
         extracted = authority.extract_watermark(watermarked)
 
         assert "decode_error" not in extracted

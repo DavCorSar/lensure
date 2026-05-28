@@ -59,7 +59,7 @@ def test_watermarked_image_psnr_is_finite_and_positive(image):
     from lensure.roles.authority import Authority
 
     authority = Authority(embed_og_hash=True, embed_method="DWT")
-    watermarked = authority.embed_watermark(image)
+    watermarked, _ = authority.embed_watermark(image)
     result = compute_image_quality(image, watermarked)
     assert math.isfinite(result["psnr"])
     assert result["psnr"] > 0.0
@@ -69,7 +69,7 @@ def test_watermarked_image_ssim_is_less_than_original(image):
     from lensure.roles.authority import Authority
 
     authority = Authority(embed_og_hash=True, embed_method="DWT")
-    watermarked = authority.embed_watermark(image)
+    watermarked, _ = authority.embed_watermark(image)
     result = compute_image_quality(image, watermarked)
     assert 0.0 <= result["ssim"] < 1.0
 

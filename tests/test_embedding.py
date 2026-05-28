@@ -21,7 +21,7 @@ def test_lsb_watermark_roundtrip():
         img = Image.open(IMAGE_PATH + image_name)
         authority = Authority(embed_og_hash=False, embed_method="LSB")
 
-        watermarked = authority.embed_watermark(img)
+        watermarked, _ = authority.embed_watermark(img)
         extracted = authority.extract_watermark(watermarked)
 
         assert "decode_error" not in extracted
@@ -36,7 +36,7 @@ def test_dwt_watermark_roundtrip():
         img = Image.open(IMAGE_PATH + image_name)
         authority = Authority(embed_og_hash=False, embed_method="DWT")
 
-        watermarked = authority.embed_watermark(img)
+        watermarked, _ = authority.embed_watermark(img)
         extracted = authority.extract_watermark(watermarked)
 
         assert "decode_error" not in extracted

@@ -50,11 +50,13 @@ def run_single_image_execution(
         hash_size=settings.hash_size,
         hash_type=settings.hash_type,
         delta_dwt=settings.delta_dwt,
+        allow_retries=settings.allow_retries,
         key_size=settings.key_size,
     )
 
-    watermarked_image = authority.embed_watermark(img)
+    watermarked_image, delta_used = authority.embed_watermark(img)
     quality = compute_image_quality(img, watermarked_image)
+    quality["delta_used"] = delta_used
     attacker = Attacker(
         watermarked_image,
         original_image_path=image_path,

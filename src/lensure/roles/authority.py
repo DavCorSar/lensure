@@ -32,6 +32,7 @@ class Authority:
         key_size: int = 2048,
         embed_method: str = "DWT",
         delta_dwt: float = 40.0,
+        allow_retries: bool = False,
         hash_size: int = 8,
         hash_type: str = "whash",
     ):
@@ -47,6 +48,7 @@ class Authority:
             )
         self.embed_method = embed_method
         self.delta_dwt = delta_dwt
+        self.allow_retries = allow_retries
         self.dwt_repetition = 7
         self.hash_size = hash_size
         self.hash_type = hash_type
@@ -105,12 +107,13 @@ class Authority:
         except Exception:
             return False
 
-    def embed_watermark(self, image: Image) -> Image:
+    def embed_watermark(self, image: Image) -> tuple[Image, float]:
         """
-        Generates a new image that includes the watermarking
+        Generates a new image that includes the watermarking.
+        Returns (watermarked_image, delta_used). When allow_retries=False the
+        delta_used is always delta_dwt and behaviour is identical to before.
         """
         h = self.compute_perceptual_hash(image)
-
         sig = self.sign_hash(h)
 
         if self.embed_og_hash:
@@ -122,10 +125,33 @@ class Authority:
         encoded = self._encode_message(m)
 
         if self.embed_method == "LSB":
-            return self._embed_lsb(image, encoded)
+            return self._embed_lsb(image, encoded), self.delta_dwt
         if self.embed_method == "DWT":
-            return self._embed_dwt(image, encoded)
+            return self._embed_dwt_with_retry(image, encoded)
         raise ValueError(f"Embed method {self.embed_method} is not valid")
+
+    def _embed_dwt_with_retry(
+        self, image: Image, encoded: bytes
+    ) -> tuple[Image, float]:
+        """
+        Embeds using DWT-QIM. If allow_retries=True and extraction fails after
+        embedding, retries up to 5 times increasing delta by 10 each attempt.
+        Restores self.delta_dwt to its original value after the call.
+        """
+        original_delta = self.delta_dwt
+        max_attempts = 5 if self.allow_retries else 1
+
+        watermarked = None
+        used_delta = original_delta
+        for attempt in range(max_attempts):
+            self.delta_dwt = original_delta + attempt * 10
+            watermarked = self._embed_dwt(image, encoded)
+            used_delta = self.delta_dwt
+            if "decode_error" not in self.extract_watermark(watermarked):
+                break
+
+        self.delta_dwt = original_delta
+        return watermarked, used_delta
 
     def extract_watermark(self, image: Image) -> dict:
         """
