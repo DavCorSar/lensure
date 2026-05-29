@@ -3,6 +3,7 @@ Definition of the cli to execute the multiple functionalities of the package
 """
 
 import os
+import time
 from typing import Optional
 
 import matplotlib
@@ -20,6 +21,9 @@ from lensure.settings import Settings
 matplotlib.use("TkAgg")
 
 app = typer.Typer()
+
+_MAX_IMAGE_RETRIES = 3
+_RETRY_WAIT_SECONDS = 5
 
 
 @app.command()
@@ -61,33 +65,45 @@ def complete_execution(
     rows = []
 
     for image_name in tqdm(os.listdir(images_path)):
-        try:
-            metrics, fig = pipelines.run_single_image_execution(
-                images_path + image_name,
-                settings=settings,
-                save_results=True,
-                pipe=pipe,
-                bluesky_client_pool=bluesky_client_pool,
-            )
-            fig.savefig(f"{output_path}/{plots_path}/{image_name}")
-            plt.close()
-
-            for attack, results in metrics.items():
-                rows.append(
-                    {
-                        "image": image_name,
-                        "attack": attack,
-                        "distance": results["distance"],
-                        "signature_valid": results["signature_valid"],
-                        "accepted": results["accepted"],
-                        "psnr": results["psnr"],
-                        "ssim": results["ssim"],
-                        "delta_used": results["delta_used"],
-                    }
+        for attempt in range(_MAX_IMAGE_RETRIES):
+            try:
+                metrics, fig = pipelines.run_single_image_execution(
+                    images_path + image_name,
+                    settings=settings,
+                    save_results=True,
+                    pipe=pipe,
+                    bluesky_client_pool=bluesky_client_pool,
                 )
-        except Exception as e:
-            print(f"Error {e} in image {image_name}")
-            plt.close()
+                fig.savefig(f"{output_path}/{plots_path}/{image_name}")
+                plt.close()
+
+                for attack, results in metrics.items():
+                    rows.append(
+                        {
+                            "image": image_name,
+                            "attack": attack,
+                            "distance": results["distance"],
+                            "signature_valid": results["signature_valid"],
+                            "accepted": results["accepted"],
+                            "psnr": results["psnr"],
+                            "ssim": results["ssim"],
+                            "delta_used": results["delta_used"],
+                        }
+                    )
+                break
+            except Exception as e:
+                plt.close()
+                if attempt < _MAX_IMAGE_RETRIES - 1:
+                    print(
+                        f"Error {e} in image {image_name}, retrying "
+                        f"({attempt + 1}/{_MAX_IMAGE_RETRIES - 1})..."
+                    )
+                    time.sleep(_RETRY_WAIT_SECONDS)
+                else:
+                    print(
+                        f"Error {e} in image {image_name} after "
+                        f"{_MAX_IMAGE_RETRIES} attempts, skipping"
+                    )
 
     df = pl.DataFrame(rows)
     csv_path = os.path.join(output_path, "results.csv")
