@@ -52,6 +52,8 @@ def run_single_image_execution(
         delta_dwt=settings.delta_dwt,
         allow_retries=settings.allow_retries,
         key_size=settings.key_size,
+        sign_method=settings.sign_method,
+        dwt_size=settings.dwt_size,
     )
 
     watermarked_image, delta_used = authority.embed_watermark(img)
