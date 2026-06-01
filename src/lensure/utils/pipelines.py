@@ -52,6 +52,8 @@ def run_single_image_execution(
         delta_dwt=settings.delta_dwt,
         allow_retries=settings.allow_retries,
         key_size=settings.key_size,
+        sign_method=settings.sign_method,
+        dwt_size=settings.dwt_size,
     )
 
     watermarked_image, delta_used = authority.embed_watermark(img)
@@ -67,7 +69,9 @@ def run_single_image_execution(
 
     attacks = settings.attacks
 
-    fig = plt.figure(figsize=(15, 12))
+    ncols = 4
+    nrows = math.ceil(len(attacks) / ncols)
+    fig = plt.figure(figsize=(16, 3.6 * nrows), constrained_layout=True)
 
     metrics = {}
     for i, attack_type in enumerate(attacks):
@@ -86,10 +90,15 @@ def run_single_image_execution(
 
         ax = fig.add_subplot(math.ceil(len(attacks) / 4), 4, i + 1)
         ax.imshow(modifyied_image, cmap="gray")
-        ax.set_title(
-            f"{attack_type}\nD={result['distance']}\nAccepted={result['accepted']}"
+        accepted_text = "accepted" if result["accepted"] else "rejected"
+        ax.set_title(attack_type, fontsize=18, pad=6)
+        ax.set_xlabel(
+            f"D={result['distance']} | {accepted_text}",
+            fontsize=18,
+            labelpad=6,
         )
-        ax.axis("off")
+        ax.set_xticks([])
+        ax.set_yticks([])
 
         metrics[attack_type] = {**result, **quality}
 

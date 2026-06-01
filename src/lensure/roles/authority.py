@@ -7,17 +7,20 @@ from PIL import Image
 import numpy as np
 import imagehash
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives.asymmetric import ec, rsa, padding
+from cryptography.hazmat.primitives.asymmetric.utils import (
+    decode_dss_signature,
+    encode_dss_signature,
+)
 import reedsolo
 import pywt
 
 VALID_EMBED_METHODS = ["LSB", "DWT"]
 VALID_HASH_TYPES = ["whash", "phash", "dhash", "ahash"]
+VALID_SIGN_METHODS = ["RSA", "ECDSA"]
 
-# The Y channel is normalised to this size before DWT embedding/extraction so
-# that the coefficient positions are invariant to the input image resolution.
-# Capacity at 512×512: (256×256)×2 = 131 072 coefficients > 70 784 bits needed.
-_DWT_FIXED_SIZE = (512, 512)  # (width, height) in PIL convention
+_DWT_SIZE_MIN = 256
+_DWT_SIZE_MAX = 2048
 
 
 class Authority:
@@ -35,53 +38,76 @@ class Authority:
         allow_retries: bool = False,
         hash_size: int = 8,
         hash_type: str = "whash",
+        sign_method: str = "RSA",
+        dwt_size: int = 512,
     ):
         self.embed_og_hash = embed_og_hash
-        self._private_key, self.public_key = self.generate_keys(
-            public_exponent, key_size
-        )
         if embed_method not in VALID_EMBED_METHODS:
             raise ValueError(f"{embed_method} is not a valid method")
         if hash_type not in VALID_HASH_TYPES:
             raise ValueError(
                 f"{hash_type} is not a valid hash type. Choose from {VALID_HASH_TYPES}"
             )
+        if sign_method not in VALID_SIGN_METHODS:
+            raise ValueError(
+                f"{sign_method} is not a valid sign method. Choose from {VALID_SIGN_METHODS}"
+            )
+        if (
+            not (_DWT_SIZE_MIN <= dwt_size <= _DWT_SIZE_MAX)
+            or (dwt_size & (dwt_size - 1)) != 0
+        ):
+            raise ValueError(
+                f"dwt_size must be a power of 2 between {_DWT_SIZE_MIN} and {_DWT_SIZE_MAX}, "
+                f"got {dwt_size}"
+            )
+        self.sign_method = sign_method
         self.embed_method = embed_method
         self.delta_dwt = delta_dwt
         self.allow_retries = allow_retries
         self.dwt_repetition = 7
         self.hash_size = hash_size
         self.hash_type = hash_type
-
-    def generate_keys(
-        self, public_exponent: int, key_size: int
-    ) -> tuple[rsa.RSAPrivateKey, rsa.RSAPublicKey]:
-        """
-        Generates a public and private key
-        """
-        sk = rsa.generate_private_key(
-            public_exponent=public_exponent, key_size=key_size
+        self.dwt_size = dwt_size
+        self._private_key, self.public_key = self.generate_keys(
+            public_exponent, key_size
         )
-        pk = sk.public_key()
-        return sk, pk
 
-    def sign_hash(self, hash_to_sign: np.ndarray):
+    def generate_keys(self, public_exponent: int, key_size: int) -> tuple:
         """
-        Returns the signed hash using the private key
+        Generates a public and private key pair for the configured sign_method.
+        """
+        if self.sign_method == "RSA":
+            sk = rsa.generate_private_key(
+                public_exponent=public_exponent, key_size=key_size
+            )
+        else:  # ECDSA
+            sk = ec.generate_private_key(ec.SECP256R1())
+        return sk, sk.public_key()
+
+    def sign_hash(self, hash_to_sign: np.ndarray) -> bytes:
+        """
+        Returns the signed hash using the private key.
+        RSA-PSS produces key_size//8 bytes; ECDSA produces exactly 64 bytes (r||s).
         """
         h_bytes = np.packbits(hash_to_sign).tobytes()
 
-        return self._private_key.sign(
-            h_bytes,
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH
-            ),
-            hashes.SHA256(),
-        )
+        if self.sign_method == "RSA":
+            return self._private_key.sign(
+                h_bytes,
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH,
+                ),
+                hashes.SHA256(),
+            )
+        # ECDSA: sign and serialise as fixed 64-byte r||s
+        der_sig = self._private_key.sign(h_bytes, ec.ECDSA(hashes.SHA256()))
+        r, s = decode_dss_signature(der_sig)
+        return r.to_bytes(32, "big") + s.to_bytes(32, "big")
 
     def verify_signature(self, h: str, signature: bytes) -> bool:
         """
-        Checks if the signature corresponds with the specified hash
+        Checks if the signature corresponds with the specified hash.
         """
         if signature == b"":
             return False
@@ -94,15 +120,23 @@ class Authority:
         h_bytes = np.packbits(h_arr).tobytes()
 
         try:
-            self.public_key.verify(
-                signature,
-                h_bytes,
-                padding.PSS(
-                    mgf=padding.MGF1(hashes.SHA256()),
-                    salt_length=padding.PSS.MAX_LENGTH,
-                ),
-                hashes.SHA256(),
-            )
+            if self.sign_method == "RSA":
+                self.public_key.verify(
+                    signature,
+                    h_bytes,
+                    padding.PSS(
+                        mgf=padding.MGF1(hashes.SHA256()),
+                        salt_length=padding.PSS.MAX_LENGTH,
+                    ),
+                    hashes.SHA256(),
+                )
+            else:  # ECDSA: reconstruct DER from raw r||s
+                if len(signature) != 64:
+                    return False
+                r = int.from_bytes(signature[:32], "big")
+                s = int.from_bytes(signature[32:], "big")
+                der_sig = encode_dss_signature(r, s)
+                self.public_key.verify(der_sig, h_bytes, ec.ECDSA(hashes.SHA256()))
             return True
         except Exception:
             return False
@@ -166,12 +200,14 @@ class Authority:
     def _extract_watermark_lsb(self, image: Image) -> dict:
         """
         Extracts the signature and the original hash without using headers.
+        Works on the R channel of RGB with the same repetition as DWT.
         """
-        img = np.array(image)
-        flat = img.flatten()
+        r = np.array(image.convert("RGB"))[:, :, 0]
+        flat = r.flatten()
 
         expected_len = self._expected_encoded_length()
-        total_bits = expected_len * 8
+        payload_bits = expected_len * 8
+        total_bits = payload_bits * self.dwt_repetition
 
         if total_bits > flat.size:
             return {
@@ -179,13 +215,22 @@ class Authority:
                 "signature": b"",
                 "decode_error": (
                     f"Image too small for LSB extraction. "
-                    f"Required bits: {total_bits}, capacity: {flat.size}"
+                    f"Required bits: {total_bits}, capacity (R channel): {flat.size}"
                 ),
             }
 
-        bits = flat[:total_bits] & 1
-        payload = np.packbits(bits).tobytes()
+        positions = self._get_lsb_positions(flat.size, total_bits)
+        raw_bits = flat[positions] & 1
 
+        if self.dwt_repetition > 1:
+            repeated = raw_bits.reshape(self.dwt_repetition, payload_bits)
+            bits = (repeated.sum(axis=0) >= (self.dwt_repetition // 2 + 1)).astype(
+                np.uint8
+            )
+        else:
+            bits = raw_bits
+
+        payload = np.packbits(bits).tobytes()
         return self._decode_payload(payload)
 
     def _extract_watermark_dwt(self, image: Image) -> dict:
@@ -227,21 +272,30 @@ class Authority:
 
     def _embed_lsb(self, image: Image, data: bytes) -> Image:
         """
-        Inserts the message in the LSB of the image
+        Inserts the message in the LSB of the R channel (RGB) with the same
+        repetition factor as DWT. R is used instead of the YCbCr Y channel
+        because PIL's integer YCbCr<->RGB conversion corrupts single-bit
+        modifications (±1 rounding flips ~99% of LSBs on roundtrip). R carries
+        the highest luminance weight (0.299) among single RGB channels, making
+        it the closest lossless analogue to Y.
         """
-        img = np.array(image)
-        flat = img.flatten()
+        rgb = np.array(image.convert("RGB"))
+        r = rgb[:, :, 0].copy()
+        flat = r.flatten()
 
         bits = np.unpackbits(np.frombuffer(data, dtype=np.uint8))
+        if self.dwt_repetition > 1:
+            bits = np.tile(bits, self.dwt_repetition)
 
-        if len(bits) > len(flat):
+        if len(bits) > flat.size:
             raise ValueError("Image is too small for the watermarking")
 
-        flat[: len(bits)] &= 0xFE
-        flat[: len(bits)] |= bits
+        positions = self._get_lsb_positions(flat.size, len(bits))
+        flat[positions] &= 0xFE
+        flat[positions] |= bits
 
-        img_watermarked = flat.reshape(img.shape)
-        return Image.fromarray(img_watermarked.astype(np.uint8))
+        rgb[:, :, 0] = flat.reshape(r.shape)
+        return Image.fromarray(rgb, mode="RGB")
 
     def _embed_dwt(self, image: Image, data: bytes) -> Image:
         """
@@ -256,7 +310,9 @@ class Authority:
         if self.dwt_repetition > 1:
             bits = np.tile(bits, self.dwt_repetition)
 
-        y_fixed = np.array(y.resize(_DWT_FIXED_SIZE, Image.LANCZOS)).astype(np.float32)
+        y_fixed = np.array(
+            y.resize((self.dwt_size, self.dwt_size), Image.LANCZOS)
+        ).astype(np.float32)
         y_padded = self._pad_even_shape(y_fixed)
         coeffs = self._embed_bits_in_dwt_coeffs(y_padded, bits)
         marked_y_fixed = pywt.idwt2(coeffs, "haar", mode="periodization")
@@ -272,7 +328,9 @@ class Authority:
         Extracts num_bits from the DWT-domain watermark using QIM parity decoding.
         """
         y = image.convert("YCbCr").split()[0]
-        y_fixed = np.array(y.resize(_DWT_FIXED_SIZE, Image.LANCZOS)).astype(np.float32)
+        y_fixed = np.array(
+            y.resize((self.dwt_size, self.dwt_size), Image.LANCZOS)
+        ).astype(np.float32)
         coeff_vector = self._get_dwt_embedding_coefficients(
             self._pad_even_shape(y_fixed)
         )
@@ -312,16 +370,21 @@ class Authority:
             ),
         )
 
+    @property
+    def _sig_len(self) -> int:
+        """Signature length in bytes: 256 for RSA-2048, 64 for ECDSA P-256."""
+        if self.sign_method == "RSA":
+            return self.public_key.key_size // 8
+        return 64  # ECDSA P-256: r||s, 32 bytes each
+
     def _expected_encoded_length(self) -> int:
         """
         Returns the expected encoded payload length in bytes.
         """
-        sig_len = self.public_key.key_size // 8
-
         if self.embed_og_hash:
-            raw_len = self._hash_bytes + sig_len
+            raw_len = self._hash_bytes + self._sig_len
         else:
-            raw_len = sig_len
+            raw_len = self._sig_len
 
         rs = reedsolo.RSCodec(200)
         dummy = b"\x00" * raw_len
@@ -342,11 +405,9 @@ class Authority:
                 "decode_error": f"Reed-Solomon failed: {e}",
             }
 
-        sig_len = self.public_key.key_size // 8
-
         if self.embed_og_hash:
             hash_bytes = decoded[: self._hash_bytes]
-            signature = decoded[self._hash_bytes : self._hash_bytes + sig_len]
+            signature = decoded[self._hash_bytes : self._hash_bytes + self._sig_len]
 
             if len(hash_bytes) != self._hash_bytes:
                 return {
@@ -355,13 +416,13 @@ class Authority:
                     "decode_error": f"Invalid hash length: {len(hash_bytes)}",
                 }
 
-            if len(signature) != sig_len:
+            if len(signature) != self._sig_len:
                 return {
                     "hash": np.zeros(self._hash_bits, dtype=np.uint8),
                     "signature": b"",
                     "decode_error": (
                         f"Invalid signature length: {len(signature)}, "
-                        f"expected {sig_len}"
+                        f"expected {self._sig_len}"
                     ),
                 }
 
@@ -372,17 +433,32 @@ class Authority:
                 "signature": signature,
             }
 
-        signature = decoded[:sig_len]
+        signature = decoded[: self._sig_len]
 
-        if len(signature) != sig_len:
+        if len(signature) != self._sig_len:
             return {
                 "signature": b"",
                 "decode_error": (
-                    f"Invalid signature length: {len(signature)}, expected {sig_len}"
+                    f"Invalid signature length: {len(signature)}, "
+                    f"expected {self._sig_len}"
                 ),
             }
 
         return {"signature": signature}
+
+    @staticmethod
+    def _get_lsb_positions(capacity: int, num_bits: int) -> np.ndarray:
+        """
+        Returns deterministic pseudo-random pixel positions for LSB embedding.
+        Uses the same seed as DWT so both methods distribute bits uniformly.
+        """
+        if num_bits > capacity:
+            raise ValueError(
+                f"Image too small for LSB embedding. "
+                f"Required bits: {num_bits}, capacity: {capacity}"
+            )
+        rng = np.random.default_rng(42)
+        return rng.permutation(capacity)[:num_bits]
 
     def _get_dwt_positions(self, capacity: int, num_bits: int) -> np.ndarray:
         """
