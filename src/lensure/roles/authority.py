@@ -200,12 +200,14 @@ class Authority:
     def _extract_watermark_lsb(self, image: Image) -> dict:
         """
         Extracts the signature and the original hash without using headers.
+        Works on the R channel of RGB with the same repetition as DWT.
         """
-        img = np.array(image)
-        flat = img.flatten()
+        r = np.array(image.convert("RGB"))[:, :, 0]
+        flat = r.flatten()
 
         expected_len = self._expected_encoded_length()
-        total_bits = expected_len * 8
+        payload_bits = expected_len * 8
+        total_bits = payload_bits * self.dwt_repetition
 
         if total_bits > flat.size:
             return {
@@ -213,13 +215,22 @@ class Authority:
                 "signature": b"",
                 "decode_error": (
                     f"Image too small for LSB extraction. "
-                    f"Required bits: {total_bits}, capacity: {flat.size}"
+                    f"Required bits: {total_bits}, capacity (R channel): {flat.size}"
                 ),
             }
 
-        bits = flat[:total_bits] & 1
-        payload = np.packbits(bits).tobytes()
+        positions = self._get_lsb_positions(flat.size, total_bits)
+        raw_bits = flat[positions] & 1
 
+        if self.dwt_repetition > 1:
+            repeated = raw_bits.reshape(self.dwt_repetition, payload_bits)
+            bits = (repeated.sum(axis=0) >= (self.dwt_repetition // 2 + 1)).astype(
+                np.uint8
+            )
+        else:
+            bits = raw_bits
+
+        payload = np.packbits(bits).tobytes()
         return self._decode_payload(payload)
 
     def _extract_watermark_dwt(self, image: Image) -> dict:
@@ -261,21 +272,30 @@ class Authority:
 
     def _embed_lsb(self, image: Image, data: bytes) -> Image:
         """
-        Inserts the message in the LSB of the image
+        Inserts the message in the LSB of the R channel (RGB) with the same
+        repetition factor as DWT. R is used instead of the YCbCr Y channel
+        because PIL's integer YCbCr<->RGB conversion corrupts single-bit
+        modifications (±1 rounding flips ~99% of LSBs on roundtrip). R carries
+        the highest luminance weight (0.299) among single RGB channels, making
+        it the closest lossless analogue to Y.
         """
-        img = np.array(image)
-        flat = img.flatten()
+        rgb = np.array(image.convert("RGB"))
+        r = rgb[:, :, 0].copy()
+        flat = r.flatten()
 
         bits = np.unpackbits(np.frombuffer(data, dtype=np.uint8))
+        if self.dwt_repetition > 1:
+            bits = np.tile(bits, self.dwt_repetition)
 
-        if len(bits) > len(flat):
+        if len(bits) > flat.size:
             raise ValueError("Image is too small for the watermarking")
 
-        flat[: len(bits)] &= 0xFE
-        flat[: len(bits)] |= bits
+        positions = self._get_lsb_positions(flat.size, len(bits))
+        flat[positions] &= 0xFE
+        flat[positions] |= bits
 
-        img_watermarked = flat.reshape(img.shape)
-        return Image.fromarray(img_watermarked.astype(np.uint8))
+        rgb[:, :, 0] = flat.reshape(r.shape)
+        return Image.fromarray(rgb, mode="RGB")
 
     def _embed_dwt(self, image: Image, data: bytes) -> Image:
         """
@@ -425,6 +445,20 @@ class Authority:
             }
 
         return {"signature": signature}
+
+    @staticmethod
+    def _get_lsb_positions(capacity: int, num_bits: int) -> np.ndarray:
+        """
+        Returns deterministic pseudo-random pixel positions for LSB embedding.
+        Uses the same seed as DWT so both methods distribute bits uniformly.
+        """
+        if num_bits > capacity:
+            raise ValueError(
+                f"Image too small for LSB embedding. "
+                f"Required bits: {num_bits}, capacity: {capacity}"
+            )
+        rng = np.random.default_rng(42)
+        return rng.permutation(capacity)[:num_bits]
 
     def _get_dwt_positions(self, capacity: int, num_bits: int) -> np.ndarray:
         """
