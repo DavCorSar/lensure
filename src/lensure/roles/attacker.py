@@ -221,7 +221,8 @@ class Attacker:
         """
         from lensure.utils.pipelines import load_image_from_path
 
-        rng = np.random.default_rng(SEED)
+        actual_seed = int(self.original_image_path.split("/")[-1].split(".png")[0])
+        rng = np.random.default_rng(actual_seed)
         parent_folder = "/".join(self.original_image_path.split("/")[:-1])
         choice = parent_folder + "/" + rng.choice(os.listdir(parent_folder))
         while choice == self.original_image_path:
