@@ -47,7 +47,10 @@ class Settings:
     attacks: List[str] = field(default_factory=lambda: list(DEFAULT_ATTACKS))
 
     def __post_init__(self):
-        if not (_DWT_SIZE_MIN <= self.dwt_size <= _DWT_SIZE_MAX) or (self.dwt_size & (self.dwt_size - 1)) != 0:
+        if (
+            not (_DWT_SIZE_MIN <= self.dwt_size <= _DWT_SIZE_MAX)
+            or (self.dwt_size & (self.dwt_size - 1)) != 0
+        ):
             raise ValueError(
                 f"dwt_size must be a power of 2 between {_DWT_SIZE_MIN} and {_DWT_SIZE_MAX}, "
                 f"got {self.dwt_size}"
